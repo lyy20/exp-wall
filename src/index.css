@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  background: #0C0C0C;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Kanit', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #D7E2EA;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  overflow-x: clip;
+}
+
+.hero-heading {
+  background: linear-gradient(180deg, #646973 0%, #BBCCD7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.contact-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: linear-gradient(123deg, #18011F 7%, #B600A8 37%, #7621B0 72%, #BE4C00 100%);
+  box-shadow:
+    inset 0 2px 12px rgba(0, 0, 0, 0.55),
+    inset 0 -2px 12px rgba(255, 255, 255, 0.14);
+  outline: 2px solid #FFFFFF;
+  outline-offset: -3px;
+  color: #FFFFFF;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 0.7rem 1.4rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  transition: opacity 200ms ease, transform 200ms ease;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.contact-button:hover {
+  opacity: 0.7;
+}
+
+.contact-button:active {
+  transform: scale(0.96);
+}
+
+@media (min-width: 640px) {
+  .contact-button { padding: 0.8rem 1.8rem; font-size: 0.9rem; }
+}
+@media (min-width: 768px) {
+  .contact-button { padding: 0.9rem 2.3rem; font-size: 1rem; }
+}
+@media (min-width: 1024px) {
+  .contact-button { padding: 1rem 2.7rem; font-size: 1.1rem; }
+}
