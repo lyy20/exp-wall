@@ -2,6 +2,7 @@ import HeroSection from './components/HeroSection';
 import MarqueeSection from './components/MarqueeSection';
 import AboutSection from './components/AboutSection';
 import ProjectsSection from './components/ProjectsSection';
+import DemoPanels from './components/DemoPanels';
 import ContactButton from './components/ContactButton';
 import FadeIn from './components/FadeIn';
 import StarField from './components/StarField';
@@ -17,6 +18,7 @@ export default function App() {
         <MarqueeSection />
         <AboutSection />
         <ProjectsSection />
+        <DemoPanels />
         <footer id="contact" className="bg-[#0C0C0C] px-6 py-20 text-center md:py-28">
           <FadeIn>
             <p className="text-[10px] uppercase tracking-[0.35em] text-[#D7E2EA]/60 md:text-xs">

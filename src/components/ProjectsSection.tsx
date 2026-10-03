@@ -1,6 +1,15 @@
 import { useRef } from 'react';
 import { motion, useScroll, useTransform, type MotionValue } from 'framer-motion';
 import FadeIn from './FadeIn';
+import { page } from '../shared/asset';
+
+// 卡片 01-03 都做了可交互的独立页（同一仓库、同一域名）；04 只有公开仓库。
+const DEMO: Record<string, { href: string; label: string; external?: boolean }> = {
+  '01': { href: page('eap'), label: '进入交互 Demo' },
+  '02': { href: page('yyhelp'), label: '进入交互 Demo' },
+  '03': { href: page('rag'), label: '进入交互 Demo' },
+  '04': { href: 'https://github.com/lyy20/RLforUSV_CTRIP', label: '查看公开仓库', external: true },
+};
 
 interface StackGroup {
   label: string;
@@ -184,6 +193,7 @@ function ProjectCard({
   const targetScale = 1 - (total - 1 - index) * 0.03;
   const scale = useTransform(progress, [index / total, 1], [1, targetScale]);
   const stackLine = project.stack.map((group) => group.items.join(' · ')).join(' · ');
+  const demo = DEMO[project.id];
 
   return (
     <div className="sticky top-24 flex h-[85vh] items-center justify-center md:top-32">
@@ -202,6 +212,16 @@ function ProjectCard({
             <p className="mt-1.5 text-[9px] uppercase tracking-[0.16em] text-[#D7E2EA]/50 md:text-[11px]">
               {project.role}
             </p>
+            {demo && (
+              <a
+                href={demo.href}
+                target={demo.external ? '_blank' : undefined}
+                rel={demo.external ? 'noreferrer' : undefined}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-[#D7E2EA]/40 px-3 py-1 text-[9px] uppercase tracking-[0.16em] text-[#D7E2EA] transition duration-200 hover:border-[#D7E2EA] hover:bg-[#D7E2EA]/10 md:text-[10px]"
+              >
+                {demo.label} <span aria-hidden="true">→</span>
+              </a>
+            )}
           </div>
         </div>
 
