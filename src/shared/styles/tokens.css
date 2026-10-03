@@ -1,0 +1,214 @@
+:root {
+  --bg: #0C0C0C;
+  --bg-soft: #101418;
+  --panel: rgba(215, 226, 234, 0.035);
+  --panel-strong: rgba(215, 226, 234, 0.07);
+  --line: rgba(215, 226, 234, 0.14);
+  --line-soft: rgba(215, 226, 234, 0.08);
+  --fg: #D7E2EA;
+  --fg-dim: rgba(215, 226, 234, 0.62);
+  --fg-faint: rgba(215, 226, 234, 0.4);
+  --accent: #B600A8;
+  --accent2: #7621B0;
+  --live: #3DDC97;
+  --replay: #7AA2FF;
+  --warn: #FFB454;
+  --err: #FF6B6B;
+  --grad-heading: linear-gradient(180deg, #646973 0%, #BBCCD7 100%);
+  --grad-btn: linear-gradient(123deg, #18011F 7%, #B600A8 37%, #7621B0 72%, #BE4C00 100%);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+}
+
+.dp-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 620px at 50% -10%, rgba(118, 33, 176, 0.16), transparent 70%),
+    linear-gradient(rgba(215, 226, 234, 0.035) 1px, transparent 1px) 0 0 / 100% 64px,
+    linear-gradient(90deg, rgba(215, 226, 234, 0.035) 1px, transparent 1px) 0 0 / 64px 100%,
+    #0C0C0C;
+  color: var(--fg);
+  font-family: 'Kanit', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.dp-wrap {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.hero-heading {
+  background: var(--grad-heading);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.dp-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.dp-panel-tight {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+}
+
+.dp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 7px 16px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.dp-btn:hover {
+  background: var(--panel-strong);
+  border-color: rgba(215, 226, 234, 0.3);
+}
+
+.dp-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.dp-btn-primary {
+  border: 2px solid #ffffff;
+  outline: 2px solid #ffffff;
+  outline-offset: -3px;
+  border-radius: 999px;
+  background: var(--grad-btn);
+  color: #ffffff;
+  text-transform: uppercase;
+}
+
+.dp-btn-primary:hover {
+  opacity: 0.75;
+  background: var(--grad-btn);
+}
+
+.dp-input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 11px;
+  outline: none;
+}
+
+.dp-input:focus {
+  border-color: rgba(215, 226, 234, 0.4);
+}
+
+.dp-input::placeholder {
+  color: rgba(215, 226, 234, 0.32);
+}
+
+select.dp-input {
+  cursor: pointer;
+  appearance: none;
+}
+
+.dp-mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  padding: 2px 9px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.dp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.dp-scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(215, 226, 234, 0.25) transparent;
+}
+
+.dp-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dp-scroll::-webkit-scrollbar-thumb {
+  background: rgba(215, 226, 234, 0.22);
+  border-radius: 999px;
+}
+
+.dp-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dp-caret::after {
+  content: '▌';
+  margin-left: 1px;
+  opacity: 0.75;
+  animation: dp-blink 1s steps(1) infinite;
+}
+
+@keyframes dp-blink {
+  0%, 50% { opacity: 0.75; }
+  51%, 100% { opacity: 0; }
+}
+
+.dp-shimmer {
+  background: linear-gradient(90deg, rgba(215, 226, 234, 0.06), rgba(215, 226, 234, 0.16), rgba(215, 226, 234, 0.06));
+  background-size: 200% 100%;
+  animation: dp-shimmer 1.4s linear infinite;
+}
+
+@keyframes dp-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (max-width: 720px) {
+  .dp-wrap { padding: 0 14px; }
+}

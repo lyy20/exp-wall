@@ -30,6 +30,9 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          # 多入口站点必须用绝对 base，否则子目录页面的 assets 会 404
+          BASE_PATH: /${{ github.event.repository.name }}/
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

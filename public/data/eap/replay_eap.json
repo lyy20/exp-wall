@@ -1,0 +1,1 @@
+{"sessions":[],"note":"在 D:/DSH_Learning 全盘（含 eap/、reports/、agent-prompt-kit/）未发现任何 LLM/模型回答日志：唯一的两份 .jsonl 是 report_ledger.jsonl（报告台账，无模型文本），无 assistant 角色记录、无 tool_calls、无 chatcmpl 痕迹。按任务要求写空数组，不编造模型回答。"}
