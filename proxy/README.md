@@ -145,9 +145,15 @@ npx wrangler deploy                        # 输出形如 https://expwall-llm.<�
 > 验收 = `LIVE=1 ACCEPT_URL=https://lyy20.github.io/exp-wall/rag/ STATUS_URL=https://llm.agent-lyy.top/api/llm/status ORIGIN=https://lyy20.github.io node proxy/test/ui-accept.mjs`
 > → **34 通过 / 0 失败**（无 key 访客真跑：逐字流式、额度递减、连点 4 次第 4 次 429、三页徽标一致）。
 >
-> 通道实测（2026-10-04 后续加固后）：`GET /api/llm/status` → caps `["chat","embed","rerank"]`；
-> `POST /api/llm/embeddings` → **200**（`provider: workers-ai` / `@cf/baai/bge-m3` / 1024 维）；
-> `POST /api/llm/rerank` → **200**（`@cf/baai/bge-reranker-base`）；`POST /api/llm/chat` → **200**（SSE 逐字，`deepseek-flash`）。
+> 通道实测（2026-10-04，站长重签有效 SiliconFlow key 之后）：`GET /api/llm/status` → caps `["chat","embed","rerank"]`、
+> `backends.embed / rerank = ["siliconflow","workers-ai"]`；
+> `POST /api/llm/embeddings` → **200**（SiliconFlow `BAAI/bge-m3`，1024 维）；
+> `POST /api/llm/rerank` → **200**（SiliconFlow `BAAI/bge-reranker-v2-m3`，响应体带 `id` 与 `meta.billed_units`）；
+> `POST /api/llm/chat` → **200**（SSE 逐字，`deepseek-flash`）。
+> 线上 /rag/ 四格实证：查询向量「真调 API（站内代理）· BAAI/bge-m3」、精排「已启用 · 站内代理 · BAAI/bge-reranker-v2-m3」，
+> 截图 `D:/DSH_Plot/output/hero-shots/live-rag-siliconflow.png`。
+> key 若再次失效（上游 401/403），同一份代码会自动掉到 Workers AI（`@cf/baai/bge-m3` / `@cf/baai/bge-reranker-base`）并在响应体与页面上照实显示，
+> 所以「SiliconFlow 报销了」不会让通道变 502 —— 这条降级路径由 harness 8c/8d 两组断言守着。
 > 三个通道都不吃彼此的额度：embedding / rerank 记在 `scope 'a'` 那一份上。
 
 部署后自查（三条，缺一不可）：
@@ -180,8 +186,9 @@ curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status" -H "Orig
   副作用两条：① 计数仍是读—改—写，KV 没有原子自增，并发下依旧是近似值（真正的兜底还是全局日预算）；
   ② 换键名的那一天，旧的 `d:` / `g:` / `u:` / `t:` 键作废 → 当日计数会从 0 重新开始一次。
   另外 `export default { fetch }` 现在有外层 try/catch，KV 故障时回 503 `proxy-degraded` 而不是裸 500。
-- **embedding / 精排现在有两条后端**：SiliconFlow（有有效 key 时优先）与 Workers AI（`[ai]` 绑定，免费档 10000 neurons/天，不需要额外 secret）。
-  **线上那个 SiliconFlow key 是无效的**（上游回 `401 {"code":30014,...,"message":"Token is invalid."}`），所以现在实际跑的是 Workers AI：
-  `@cf/baai/bge-m3` 出 1024 维查询向量、`@cf/baai/bge-reranker-base` 出精排分，页面上照实显示这两个模型名。
-  前端仍保留两条降级（离线预计算向量 / 按 RRF 取前 5）作为「连兜底也不可用」时的最后一道保险。
-  想让 embedding 换成 SiliconFlow 的 bge-m3（或 bge-reranker-v2-m3），重签一个有效 key 再 `npx wrangler secret put SILICONFLOW_API_KEY`，代码不用改。
+- **embedding / 精排有两条后端**：SiliconFlow（`SILICONFLOW_API_KEY` 有效时优先：`BAAI/bge-m3` / `BAAI/bge-reranker-v2-m3`）
+  与 Workers AI（`[ai]` 绑定，免费档 10000 neurons/天，不需要额外 secret：`@cf/baai/bge-m3` / `@cf/baai/bge-reranker-base`）。
+  线上当前实际跑的是 **SiliconFlow**（2026-10-04 站长重签 key 后实测，见上一节的通道实测）：`BAAI/bge-m3` 出 1024 维查询向量、
+  `BAAI/bge-reranker-v2-m3` 出精排分，页面四格照实显示真实模型名；SiliconFlow 若回 401/403 会自动降级到 Workers AI，
+  所以「key 过期」只会让页面上的模型名换成 `@cf/...`，不会让通道报错。换 key：`npx wrangler secret put SILICONFLOW_API_KEY`（代码不用改）。
+  前端仍保留两条降级（离线预计算向量 / 按 RRF 取前 5）作为「两边都不可用」时的最后一道保险。
