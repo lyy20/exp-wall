@@ -4,6 +4,7 @@ import { chatStream, describeError, embedTexts, normalize, rerankDocs } from '..
 import { matchReplay, playText } from '../shared/replay';
 import { Badge, Chip, KeyValue, Panel, StatTile } from '../shared/ui/core';
 import { ModeBadge, QuotaBar } from '../shared/ui/llm-ui';
+import type { LlmMode } from '../shared/llm/mode';
 import { findQueryVector, f32FromBase64, type RagAssets } from './assets';
 import { retrieve, type Chunk, type Stages } from './retrieve';
 
@@ -21,14 +22,16 @@ export interface RagReplayItem {
 type Hit = { idx: number; rrf: number; rrfRank: number; denseRank?: number; sparseRank?: number; chunk: Chunk; rerankScore?: number; rerankRank?: number };
 
 type Result = {
-  mode: 'live' | 'replay';
+  /** 这份回答是用哪种通道产出的，徽标必须与它一致 */
+  mode: LlmMode;
   question: string;
   tokens: string[];
   stages: Stages;
   hits: Hit[];
-  answerMode: 'live' | 'replay' | 'none';
+  /** streaming = 正在逐字生成（面板先渲染出来，用户当场能看见字一个个出现），结束后才是 live/replay */
+  answerMode: 'live' | 'replay' | 'none' | 'streaming';
   provenance?: string;
-  embed: { source: 'key' | 'precomputed'; model: string; latencyMs?: number; sim?: number };
+  embed: { source: 'key' | 'proxy' | 'precomputed'; model: string; latencyMs?: number; sim?: number };
   rerank?: { applied: boolean; model: string; latencyMs?: number; note?: string };
   timings: { retrieveMs: number; answerMs?: number; firstTokenMs?: number };
   usage?: { promptTokens: number; completionTokens: number };
@@ -48,7 +51,7 @@ function fmtMs(ms?: number): string {
   return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms';
 }
 
-export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; llm: { live: boolean }; replayScripts: RagReplayItem[] }) {
+export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; llm: { live: boolean; mode: LlmMode }; replayScripts: RagReplayItem[] }) {
   const [question, setQuestion] = useState('');
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState('');
@@ -86,7 +89,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         setStage('正在用你的 key 真算查询向量（embedding）…');
         const emb = await embedTexts([q], { signal: ctrl.signal });
         qVec = normalize(emb.vectors[0]);
-        embedInfo = { source: 'key', model: emb.providerId + ' · ' + emb.model, latencyMs: emb.latencyMs };
+        embedInfo = { source: llm.mode === 'proxy' ? 'proxy' : 'key', model: (emb.providerId === 'proxy' ? '站内代理' : emb.providerId) + ' · ' + emb.model, latencyMs: emb.latencyMs };
       } else {
         const found = findQueryVector(assets, q);
         if (!found || found.sim < 0.5) {
@@ -125,12 +128,12 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         const rr = await rerankDocs(q, hits.map((h) => h.chunk.text.slice(0, 900)), { topN: cfg.finalK, signal: ctrl.signal });
         if (rr) {
           top = rr.order.slice(0, cfg.finalK).map((i, rank) => ({ ...hits[i], rerankScore: rr.scores[rank], rerankRank: rank + 1 }));
-          rerankInfo = { applied: true, model: rr.providerId + ' · ' + rr.model, latencyMs: performance.now() - tRe };
+          rerankInfo = { applied: true, model: (rr.providerId === 'proxy' ? '站内代理' : rr.providerId) + ' · ' + rr.model, latencyMs: performance.now() - tRe };
         } else {
           rerankInfo = { applied: false, model: '本期未接入可用 rerank 服务商', note: 'RRF 融合结果直接作为最终结果（与评测口径一致）' };
         }
       } else if (useRerank && !llm.live) {
-        rerankInfo = { applied: false, model: '未配置 key', note: '零配置下不精排，与 Python 评测口径一致（评测本身也不跑 rerank）' };
+        rerankInfo = { applied: false, model: '没有可用的 rerank 通道', note: '不精排，与 Python 评测口径一致（评测本身也不跑 rerank）' };
       }
 
       const g = goldById(q);
@@ -142,12 +145,15 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         : undefined;
 
       const base: Result = {
-        mode: llm.live ? 'live' : 'replay', question: q, tokens: stages.tokens, stages, hits, answerMode: 'none',
+        mode: llm.mode, question: q, tokens: stages.tokens, stages, hits, answerMode: 'none',
         embed: embedInfo, rerank: rerankInfo, timings: { retrieveMs }, evalRef,
       };
 
       if (llm.live) {
         setStage('真调模型生成回答（SSE 流式）…');
+        // 先把检索结果与回答面板渲染出来（answerMode='streaming'），
+        // 否则整个面板要等生成结束才出现 —— 流式就只在网络层流，用户看不见「逐字」。
+        setResult({ ...base, answerMode: 'streaming' });
         const tA = performance.now();
         const res = await chatStream(
           [{ role: 'system', content: SYSTEM }, { role: 'user', content: buildUser(top, q) }],
@@ -155,7 +161,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         );
         setAnswer(res.text);
         setResult({
-          ...base, answerMode: 'live', provenance: res.providerId + ' · ' + res.model + ' @ ' + new Date().toLocaleTimeString(),
+          ...base, answerMode: 'live', provenance: (res.providerId === 'proxy' ? '站内代理' : res.providerId) + ' · ' + res.model + ' @ ' + new Date().toLocaleTimeString(),
           timings: { retrieveMs, answerMs: performance.now() - tA, firstTokenMs: res.firstTokenMs },
           usage: res.usage,
         });
@@ -165,6 +171,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         const text = script?.answer ?? '';
         if (script && text) {
           setStage('零配置：按真实节奏回放录制的模型输出…');
+          setResult({ ...base, answerMode: 'streaming' });
           const ms = await playText(text, { onToken: (c) => setAnswer((prev) => prev + c), charsPerSecond: 60, signal: ctrl.signal });
           setResult({
             ...base, answerMode: 'replay',
@@ -177,7 +184,9 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
       }
       setStage('');
     } catch (err) {
-      if ((err as Error)?.name !== 'AbortError') setError(describeError(err));
+      // 出错时把回答面板收掉：'streaming' 那一帧已经先把面板渲染出来了，
+      // 留着它会显示「（无）」——看起来像「模型返回了空答案」，而不是「这一轮被拒绝了」。
+      if ((err as Error)?.name !== 'AbortError') { setError(describeError(err)); setResult(null); }
       setStage('');
     } finally {
       setBusy(false);
@@ -192,7 +201,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
     <Panel
       title="提问：浏览器内真检索 → 真生成"
       subtitle="检索算子完全在本地跑（int8 去量化内积 + BM25 + RRF）。有 key 时查询向量与回答都真调接口；没 key 时查询向量取离线预计算那份，检索仍是真的，回答走录制回放。"
-      right={<ModeBadge live={llm.live} />}
+      right={<ModeBadge mode={llm.mode} />}
     >
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input
@@ -226,7 +235,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         有 key 时叠加 bge-reranker-v2-m3 精排（评测口径不含精排，便于与 Python 对齐）
       </label>
 
-      <div style={{ marginTop: 10 }}><QuotaBar /></div>
+      <div style={{ marginTop: 10 }}><QuotaBar mode={llm.mode} /></div>
       {stage && <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--replay)' }}>{stage}</p>}
       {error && (
         <div className="dp-panel-tight" style={{ marginTop: 10, padding: 12, borderColor: 'var(--err)' }}>
@@ -239,8 +248,13 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
             <StatTile label="检索耗时" value={fmtMs(result.timings.retrieveMs)} sub={result.stages.dense.length + ' dense / ' + result.stages.sparse.length + ' sparse / ' + result.stages.fused.length + ' 融合'} tone="live" />
-            <StatTile label="查询向量" value={result.embed.source === 'key' ? '真调 API' : '离线预计算'} sub={result.embed.model + (result.embed.sim !== undefined ? ' · 匹配 ' + result.embed.sim.toFixed(3) : '')} tone={result.embed.source === 'key' ? 'live' : 'replay'} />
-            <StatTile label="生成" value={result.answerMode === 'live' ? '实时' : result.answerMode === 'replay' ? '回放' : '未生成'} sub={result.provenance || '需要 key 才能实时生成'} tone={result.answerMode === 'live' ? 'live' : 'replay'} />
+            <StatTile label="查询向量" value={result.embed.source === 'precomputed' ? '离线预计算' : result.embed.source === 'proxy' ? '真调 API（站内代理）' : '真调 API'} sub={result.embed.model + (result.embed.sim !== undefined ? ' · 匹配 ' + result.embed.sim.toFixed(3) : '')} tone={result.embed.source === 'precomputed' ? 'replay' : 'live'} />
+            <StatTile
+              label="生成"
+              value={result.answerMode === 'live' ? '实时' : result.answerMode === 'streaming' ? '生成中' : result.answerMode === 'replay' ? '回放' : '未生成'}
+              sub={result.provenance || '需要 key 才能实时生成'}
+              tone={result.answerMode === 'live' || result.answerMode === 'streaming' ? 'live' : 'replay'}
+            />
             <StatTile label="精排" value={result.rerank?.applied ? '已启用' : '未启用'} sub={result.rerank?.model || '—'} tone={result.rerank?.applied ? 'live' : 'neutral'} />
           </div>
 
@@ -277,14 +291,16 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
 
           <div className="dp-panel-tight" style={{ padding: 12 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-              <ModeBadge live={result.answerMode === 'live'} />
+              <ModeBadge mode={result.answerMode === 'live' || result.answerMode === 'streaming' ? result.mode : 'replay'} />
               <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
                 {result.answerMode === 'none'
                   ? '零配置下这条问题没有录制答案 —— 填入你自己的 key 即可实时提问。检索结果（上面）仍然是刚刚在浏览器里真算出来的。'
-                  : result.provenance}
+                  : result.answerMode === 'streaming'
+                    ? '正在逐字生成…'
+                    : result.provenance}
               </span>
             </div>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.75, color: 'var(--fg)', whiteSpace: 'pre-wrap' }}>
+            <p className="dp-answer" style={{ margin: 0, fontSize: 13, lineHeight: 1.75, color: 'var(--fg)', whiteSpace: 'pre-wrap' }}>
               {answer || (busy ? '…' : '（无）')}
               {busy && <span className="dp-caret">▍</span>}
             </p>

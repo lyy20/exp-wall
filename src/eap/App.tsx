@@ -54,13 +54,13 @@ export function App() {
                 <li>真实训练日志接入：源数据是本地 {a ? '146.5 GB' : '146.5 GB'} 的 SAC 日志目录与 SQLite 台账，静态站只带走导出后的真实序列与 golden 值</li>
                 <li>真实工具 I/O：8 个工具的四个段是真实契约，但线上没有后端去执行它们，参数门禁是真跑、执行是本地模拟</li>
                 <li>LLM 数值参与：<b>永不做</b> —— 这是项目的第一条设计约束，不是没实现</li>
-                <li>LLM 回放素材：项目日志里没有模型回答记录，所以本页没有回放；想现场看模型改写请填 key（改写结果仍要被检查器判）</li>
+                <li>LLM 回放素材：项目日志里没有模型回答记录，所以本页没有回放；想现场看模型改写请走站内代理或填自己的 key（改写结果仍要被检查器判）</li>
               </ul>
             </div>
           </div>
         </Panel>
 
-        <KeyBar llm={llm} note="只有「让 LLM 试着重写措辞」这一步会用到 key；其余全部是浏览器内确定性计算。key 只存在你的 localStorage。" />
+        <KeyBar llm={llm} note="只有「让 LLM 试着重写措辞」这一步会用到模型通道：填 key 直连，没填走站内代理（本站 Worker，密钥在服务端）；其余全部是浏览器内确定性计算。" />
 
         {err && <Panel title="资产加载失败"><p style={{ margin: 0, fontSize: 12, color: 'var(--err)' }}>{err}</p></Panel>}
         {!a && !err && <Panel title="正在加载数据资产…"><p style={{ margin: 0, fontSize: 12, color: 'var(--fg-dim)' }}>contracts / errors / runs / series / golden / audit_sample</p></Panel>}
@@ -80,7 +80,7 @@ export function App() {
 
             <ToolsPanel tools={a.contracts.tools} />
             <StatsPanel series={a.series.runs} golden={a.golden} />
-            <WordingPanel llm={{ live: llm.live, keyDraft: llm.keyDraft }} />
+            <WordingPanel llm={{ live: llm.live, mode: llm.mode, keyDraft: llm.keyDraft }} />
             <AuditPanel
               errors={a.errors.errors}
               audit={a.audit}

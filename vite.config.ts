@@ -18,6 +18,14 @@ const basePath = process.env.BASE_PATH || '/';
 export default defineConfig({
   base: basePath,
   plugins: [react()],
+  server: {
+    // 两条忽略规则都是为了 dev server 不被写盘工具搞死：
+    //   1) proxy/ 是独立的 Cloudflare Worker 包，站点不 import 它，但默认会被整个仓库 watch；
+    //   2) 编辑任何源文件时，写盘工具会先建 `.<文件名>.<pid>.<uuid>.tmpdir/<文件名>.tmp` 再原子替换，
+    //      这些临时目录在 Windows 上会被 vite 的 FSWatcher 抢到并抛 EBUSY 直接崩进程（踩过两次：
+    //      proxy/src/limits.ts 与 src/shared/ui/llm-ui.tsx）。
+    watch: { ignored: ['**/proxy/**', '**/.*.tmpdir/**', '**/.*.tmp'] },
+  },
   build: {
     rollupOptions: {
       input: {

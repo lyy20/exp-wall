@@ -4,6 +4,7 @@ import { chatStream, describeError } from '../shared/llm/client';
 import { playText } from '../shared/replay';
 import { Badge, Chip, CodeBlock, KeyValue, Panel, StatTile } from '../shared/ui/core';
 import { ModeBadge, QuotaBar } from '../shared/ui/llm-ui';
+import type { LlmMode } from '../shared/llm/mode';
 import type { YyAssets, YyConv, YyTurn } from './assets';
 import { decide, ToolRuntime, toObservation, type ToolEnvelope } from './engine';
 
@@ -34,7 +35,7 @@ function jsonPretty(s: string): string {
   try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; }
 }
 
-export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolean } }) {
+export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolean; mode: LlmMode } }) {
   const convs = assets.replay;
   const [ci, setCi] = useState(0);
   const [shown, setShown] = useState<YyTurn[]>(convs[0]?.turns ?? []);
@@ -137,7 +138,7 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
       <Panel
         title="对话台：17 组真实对话回放"
         subtitle="这些对话来自项目真实产物：状态链取自 demo_ckpt.db 的 checkpoint 记录，工具轮的 args/result 是用项目 venv 真实调用 5 个 @tool 的落盘信封，assistant 文本取自项目 output 里真实模型回答。存在缺口的地方我照实标注，不补编。"
-        right={<ModeBadge live={llm.live} liveLabel="可切实时 ReAct" replayLabel="录制回放" />}
+        right={<ModeBadge mode={llm.mode} liveLabel="可切实时 ReAct" replayLabel="录制回放" />}
       >
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {convs.map((c, i) => (
@@ -175,15 +176,15 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
       <Panel
         title="实时 ReAct：有 key 时真跑循环（工具真执行）"
         subtitle="这不是把回放换皮：工具调用走浏览器里那套真实实现（同一套参数校验、同一份 fixture 数据、同一份幂等表），终止条件也按项目的 max_steps / max_wall_s / 重复调用次数真判。"
-        right={<ModeBadge live={llm.live} liveLabel="可实时运行" replayLabel="需要 key" />}
+        right={<ModeBadge mode={llm.mode} liveLabel="可实时运行" replayLabel="需要 key" />}
       >
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input className="dp-input" style={{ flex: '1 1 320px' }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="例如：我要退款 / 订单 1001 到哪了" />
           <button type="button" className="dp-btn dp-btn-primary" onClick={() => void liveRun(q)} disabled={!llm.live || run}>{run ? '循环运行中…' : '真跑一轮'}</button>
           {run && <button type="button" className="dp-btn" onClick={() => abort.current?.abort()}>中止</button>}
         </div>
-        {!llm.live && <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--fg-faint)' }}>零配置模式下左边可以完整跑回放；想让它现场处理任意新问题，请在页面上方填入你自己的 key（只存 localStorage）。</p>}
-        <div style={{ marginTop: 10 }}><QuotaBar /></div>
+        {!llm.live && <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--fg-faint)' }}>零配置下左边可以完整跑回放；想让它现场处理任意新问题，需要模型通道：站内代理可用就直接跑，否则在页面上方填你自己的 key（只存 localStorage）。</p>}
+        <div style={{ marginTop: 10 }}><QuotaBar mode={llm.mode} /></div>
         {err && <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--err)' }}>{err.title}：{err.detail}</p>}
         {term && <p style={{ margin: '10px 0 0', fontSize: 12, color: term === 'answered' ? 'var(--live)' : 'var(--warn)' }}>agent_termination = <b className="dp-mono">{term}</b></p>}
 

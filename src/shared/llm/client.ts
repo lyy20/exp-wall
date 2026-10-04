@@ -1,6 +1,12 @@
+import { LlmError } from './errors';
+import { fetchWithTimeout, joinUrl, readSseData } from './http';
 import { getCred, loadPreferred } from './keys';
 import { clampInput, clampMaxTokens, estimateTokens, limiter } from './limiter';
+import { chatViaProxy, embedViaProxy, proxyConfigured, proxyHas, rerankViaProxy } from './proxy';
 import { DEFAULT_EMBED_PROVIDER_ID, getProvider, providersWith, type Provider } from './providers';
+
+export { LlmError, describeError } from './errors';
+export type { LlmErrorCode } from './errors';
 
 export type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -51,95 +57,16 @@ export interface RerankResult {
   live: true;
 }
 
-export type LlmErrorCode =
-  | 'no-key'
-  | 'unknown-provider'
-  | 'no-capability'
-  | 'http'
-  | 'network'
-  | 'aborted'
-  | 'per-minute'
-  | 'per-session'
-  | 'bad-response';
-
-export class LlmError extends Error {
-  code: LlmErrorCode;
-  hint?: string;
-  constructor(code: LlmErrorCode, message: string, hint?: string) {
-    super(message);
-    this.name = 'LlmError';
-    this.code = code;
-    this.hint = hint;
-  }
-}
-
-export function describeError(err: unknown): { title: string; detail: string } {
-  if (err instanceof LlmError) {
-    const title =
-      err.code === 'no-key'
-        ? '未配置 API key'
-        : err.code === 'per-minute' || err.code === 'per-session'
-          ? '触发限流'
-          : err.code === 'aborted'
-            ? '已取消'
-            : err.code === 'network'
-              ? '网络不可达'
-              : err.code.startsWith('http')
-                ? '接口报错'
-                : '调用失败';
-    return { title, detail: err.message };
-  }
-  const e = err as Error;
-  return { title: '调用失败', detail: e?.message || String(err) };
-}
-
-function joinUrl(base: string, path: string): string {
-  return base.replace(/\/+$/, '') + path;
-}
-
-async function fetchWithTimeout(url: string, init: RequestInit, signal?: AbortSignal, timeoutMs = 60000): Promise<Response> {
-  if (signal) return fetch(url, { ...init, signal });
-  const ctrl = new AbortController();
-  const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
-async function readSse(
+function readSse(
   res: Response,
   onEvent: (data: unknown) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const body = res.body;
-  if (!body) throw new LlmError('bad-response', '响应没有可读取的流');
-  const reader = body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  for (;;) {
-    if (signal?.aborted) {
-      await reader.cancel().catch(() => undefined);
-      throw new LlmError('aborted', '请求已取消');
-    }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n');
-    buffer = parts.pop() ?? '';
-    for (const raw of parts) {
-      const line = raw.trim();
-      if (!line || !line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') return;
-      try {
-        onEvent(JSON.parse(payload));
-      } catch {
-        /* 忽略无法解析的心跳行 */
-      }
-    }
-  }
+  return readSseData(res, onEvent, signal).catch((err: unknown) => {
+    const e = err as Error;
+    if (e.name === 'AbortError') throw new LlmError('aborted', '请求已取消');
+    throw new LlmError('bad-response', e.message);
+  });
 }
 
 export interface ResolvedTarget {
@@ -183,12 +110,48 @@ export function resolveEmbedTarget(opts: { providerId?: string; model?: string }
   return { provider, apiKey: cred.apiKey, model };
 }
 
-/** 流式对话（SSE）。真实请求，受 limiter 限流约束。 */
+/** 有 key 走 BYOK；没 key 但站内代理可用则返回 null（交给代理）；两者都没有才抛 no-key。 */
+function resolveChatTargetOrNull(opts: { providerId?: string; model?: string }): ResolvedTarget | null {
+  try {
+    return resolveChatTarget(opts);
+  } catch (err) {
+    if (err instanceof LlmError && err.code === 'no-key' && proxyConfigured() && proxyHas('chat')) return null;
+    throw err;
+  }
+}
+
+/** 有 key 用自己的 key；没 key 但站内代理提供 embedding 就用代理。 */
+function resolveEmbedTargetOrNull(opts: { providerId?: string; model?: string }): ResolvedTarget | null {
+  try {
+    return resolveEmbedTarget(opts);
+  } catch (err) {
+    if (err instanceof LlmError && err.code === 'no-key' && proxyConfigured() && proxyHas('embed')) return null;
+    throw err;
+  }
+}
+
+/**
+ * 流式对话（SSE）。真实请求，受 limiter 限流约束。
+ * 选路：自填 key 直连 > 站内代理 > 抛 no-key（调用方据此回落到回放）。
+ */
 export async function chatStream(messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult> {
-  const target = resolveChatTarget(opts);
-  const { provider, apiKey, model } = target;
   const prepared = messages.map((m) => ({ role: m.role, content: clampInput(m.content) }));
   const maxTokens = clampMaxTokens(opts.maxTokens);
+  const target = resolveChatTargetOrNull(opts);
+  if (!target) {
+    return limiter.run(async () => {
+      const out = await chatViaProxy(prepared, {
+        model: opts.model,
+        temperature: opts.temperature,
+        maxTokens,
+        signal: opts.signal,
+        onToken: opts.onToken,
+      });
+      limiter.recordUsage(out.usage.promptTokens, out.usage.completionTokens);
+      return out;
+    });
+  }
+  const { provider, apiKey, model } = target;
   const started = performance.now();
 
   return limiter.run(async () => {
@@ -281,9 +244,15 @@ export async function embedTexts(
   opts: { providerId?: string; model?: string; signal?: AbortSignal } = {},
 ): Promise<EmbedResult> {
   if (!texts.length) throw new LlmError('bad-response', '没有要向量化的文本');
-  const target = resolveEmbedTarget(opts);
-  const { provider, apiKey, model } = target;
   const inputs = texts.map((t) => clampInput(t));
+  const target = resolveEmbedTargetOrNull(opts);
+  if (!target) {
+    // 代理分支不进本地 limiter：一次提问要发 embedding + rerank + chat 三个请求，
+    // 本地 limiter 若按调用计数，三问就会先撞本机限流、永远到不了服务端的 429。
+    // 站内额度由服务端按通道把关（chat 一份、embedding/rerank 另一份）。
+    return embedViaProxy(inputs, { model: opts.model, signal: opts.signal });
+  }
+  const { provider, apiKey, model } = target;
   const started = performance.now();
 
   return limiter.run(async () => {
@@ -327,7 +296,18 @@ export async function rerankDocs(
   const provider = getProvider(providerId);
   if (!provider || !provider.caps.includes('rerank')) return null;
   const cred = getCred(provider.id);
-  if (!cred) return null;
+  if (!cred) {
+    // 没填 key：站内代理配了 rerank 就走代理，否则如实返回 null（调用方会明说「不跑 rerank」）
+    if (proxyConfigured() && proxyHas('rerank')) {
+      // 同 embedTexts：代理分支不进本地 limiter，额度由服务端 aux 通道把关
+      return rerankViaProxy(query, docs.map((d) => clampInput(d)), {
+        model: opts.model || provider.rerankModel,
+        topN: opts.topN ?? docs.length,
+        signal: opts.signal,
+      });
+    }
+    return null;
+  }
   const model = (opts.model || provider.rerankModel || '').trim();
   const started = performance.now();
   return limiter.run(async () => {

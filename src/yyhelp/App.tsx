@@ -53,13 +53,13 @@ export function App() {
                 <li>不跑 Python / LangGraph：状态机用 TypeScript 按同一套节点与终止条件重写，语义对齐但不是同一个运行时</li>
                 <li>不连真实 Milvus 与订单库：库向量是从 Milvus parquet 导出的 int8 真向量，订单是项目源码里的真值 + 5 条标注补齐</li>
                 <li>没有「完整对话日志」这回事：源项目里没有 assistant 角色的多轮日志，回放由三处真实产物拼装（下面逐条标注）</li>
-                <li>语义检索需要你的 key（真 embedding）；项目默认走 stub，这不是我砍的，是线上默认状态</li>
+                <li>语义检索需要真 embedding 通道（站内代理若配了 SiliconFlow 也能走，否则填你自己的 key）；项目默认走 stub，这不是我砍的，是线上默认状态</li>
               </ul>
             </div>
           </div>
         </Panel>
 
-        <KeyBar llm={llm} note="只有「让 LLM 兜底判意图」和「实时 ReAct」「真语义检索」三步用 key；规则路由、工具执行、回放都零配置可跑。" />
+        <KeyBar llm={llm} note="只有「让 LLM 兜底判意图」「实时 ReAct」「真语义检索」三步需要模型通道：填自己的 key 就直连，没填就走站内代理（本站 Worker 转发，密钥在服务端）；规则路由、工具执行、回放都零配置可跑。" />
 
         {err && <Panel title="资产加载失败"><p style={{ margin: 0, fontSize: 12, color: 'var(--err)' }}>{err}</p></Panel>}
         {!a && !err && <Panel title="正在加载数据资产…"><p style={{ margin: 0, fontSize: 12, color: 'var(--fg-dim)' }}>kb / kb_vectors / intents / tools / policy / orders / replay_chat / config</p></Panel>}
@@ -77,9 +77,9 @@ export function App() {
               </div>
             </Panel>
 
-            <IntentPanel assets={a} llm={{ live: llm.live }} />
-            <ChatPanel assets={a} llm={{ live: llm.live }} />
-            <KbPanel assets={a} llm={{ live: llm.live }} />
+            <IntentPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
+            <ChatPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
+            <KbPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
 
             <Panel title="工具契约：为什么「工具失败」不等于「系统崩溃」" subtitle="5 个工具共用一个信封，错误必须可枚举；只读不登记幂等，写操作先确认再落库，成功后只登记一次。">
               <div style={{ overflowX: 'auto' }} className="dp-scroll">

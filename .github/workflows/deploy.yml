@@ -33,6 +33,10 @@ jobs:
         env:
           # 多入口站点必须用绝对 base，否则子目录页面的 assets 会 404
           BASE_PATH: /${{ github.event.repository.name }}/
+          # 站内 LLM 代理（Cloudflare Worker）地址，例如 https://expwall-llm.xxx.workers.dev
+          # 在仓库 Settings → Secrets and variables → Actions → Variables 里配置；
+          # 没配时这里取到空串 → 前端判定「没有代理」，行为与纯静态站完全一致（回放）。
+          VITE_PROXY_BASE_URL: ${{ vars.VITE_PROXY_BASE_URL }}
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

@@ -1,0 +1,20 @@
+name = "expwall-llm"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+workers_dev = true
+
+# 部署前先建 KV：npx wrangler kv namespace create RATE_KV
+# 把命令输出的 id 填到下面（未绑定时 Worker 会按 fail-closed 拒绝服务）。
+[[kv_namespaces]]
+binding = "RATE_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# 只允许作品集站点调用（本机开发端口由 Worker 内部额外放行）
+ALLOWED_ORIGINS = "https://lyy20.github.io"
+# 上游可选覆盖（测试用）；生产留空即用默认
+# UPSTREAM_BASE = "https://api.deepseek.com"
+# 想开放 embedding / 精排再多配一个 SILICONFLOW_API_KEY secret，并把上游换上：
+# SILICONFLOW_BASE = "https://api.siliconflow.cn/v1"
+# 闸门数值可覆盖（JSON）：{"perMinute":3,"perDay":30,"globalPerDay":200,"maxOutputTokens":512}
+# LIMITS_JSON = "{\"perMinute\":3,\"perDay\":30,\"globalPerDay\":200,\"maxOutputTokens\":512}"

@@ -3,12 +3,13 @@ import { useState } from 'react';
 import { describeError, embedTexts } from '../shared/llm/client';
 import { Badge, Chip, Panel, StatTile } from '../shared/ui/core';
 import { ModeBadge } from '../shared/ui/llm-ui';
+import type { LlmMode } from '../shared/llm/mode';
 import type { YyAssets } from './assets';
 import { semanticSearchKb, ToolRuntime } from './engine';
 
 interface Hit { chunk_id: string; heading: string; text: string; score: number }
 
-export function KbPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolean } }) {
+export function KbPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolean; mode: LlmMode } }) {
   const [q, setQ] = useState('新疆的运费是多少钱');
   const [topK, setTopK] = useState(3);
   const [stub, setStub] = useState<{ hits: Hit[]; err?: string; index?: string } | null>(null);
@@ -33,7 +34,7 @@ export function KbPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolea
     try {
       const emb = await embedTexts([q], { providerId: 'siliconflow', model: 'BAAI/bge-m3' });
       const r = semanticSearchKb(emb.vectors[0], assets, topK);
-      setSem({ hits: r.hits as Hit[], ms: emb.latencyMs, model: emb.providerId + ' · ' + emb.model });
+      setSem({ hits: r.hits as Hit[], ms: emb.latencyMs, model: (emb.providerId === 'proxy' ? '站内代理' : emb.providerId) + ' · ' + emb.model });
     } catch (e) { const d = describeError(e); setSem({ hits: [], err: d.title + '：' + d.detail }); }
     setBusy(false);
   };
@@ -44,7 +45,7 @@ export function KbPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolea
     <Panel
       title="知识库检索：两条后端，必须说清用的是哪条"
       subtitle="左边是项目默认的 stub 关键字路径（零配置、真跑、就是线上默认行为），右边是真语义检索（需要你的 bge-m3 key）。项目自己在 docstring 里写明：默认 stub 时端到端用的是关键字匹配，不是语义检索，典型症状就是「新疆的运费是多少钱」答不出。"
-      right={<ModeBadge live={llm.live} liveLabel="语义路径可用" replayLabel="仅 stub 路径" />}
+      right={<ModeBadge mode={llm.mode} liveLabel="语义路径可用" replayLabel="仅 stub 路径" />}
     >
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input className="dp-input" style={{ flex: '1 1 300px' }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="试试「新疆的运费是多少钱」和「运费怎么算」" />
@@ -79,7 +80,7 @@ export function KbPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolea
           <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--replay)', fontWeight: 700 }}>真语义路径（bge-m3 + int8 库向量）</p>
           {sem?.model && <p className="dp-mono" style={{ margin: '0 0 8px', fontSize: 10.5, color: 'var(--fg-faint)' }}>{sem.model} · 查询耗时 {Math.round(sem.ms ?? 0)} ms · 索引 yyhelp_kb_v1</p>}
           {sem?.err && <p style={{ margin: 0, fontSize: 11.5, color: 'var(--warn)' }}>{sem.err}</p>}
-          {!sem && <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg-faint)' }}>{llm.live ? '点「真语义检索」：会用你的 key 真调 embedding 接口，再与库里的 163×1024 int8 向量算余弦。' : '需要你自己的 key（SiliconFlow / DashScope 的 embedding）。'}</p>}
+          {!sem && <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg-faint)' }}>{llm.mode === 'byok' ? '点「真语义检索」：会用你的 key 真调 embedding 接口，再与库里的 163×1024 int8 向量算余弦。' : llm.mode === 'proxy' ? '点「真语义检索」：走站内代理的 embedding 通道（密钥在服务端），再与库里的 163×1024 int8 向量算余弦。' : '需要模型通道：站内代理没配 embedding，请填你自己的 key（SiliconFlow / DashScope 的 embedding）。'}</p>}
           {(sem?.hits ?? []).map((h, i) => (
             <div key={h.chunk_id + i} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line-soft)' }}>
               <p className="dp-mono" style={{ margin: 0, fontSize: 10.5, color: 'var(--replay)' }}>#{i + 1} {h.chunk_id} · cos {h.score}</p>

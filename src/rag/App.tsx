@@ -70,14 +70,14 @@ export function App() {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.85, color: 'var(--fg-dim)' }}>
                 <li>PDF 解析与切块：题目里 15–21 MB 的 PDF 与 2.2 GB 的 bge-m3 权重不进静态站点，改为导出真实的 800 条 chunk 子集</li>
                 <li>知识库是 5325 条的<b>子集</b>（{cfg ? String(cfg.asset_chunks) : '800'} / {cfg ? String(cfg.corpus_chunks) : '5325'}），依据是让评测 gold 全部落在子集内，数字可直接对齐</li>
-                <li>不跑 FastAPI 服务：静态站没有后端，模型调用走浏览器直连（CORS 已实测）</li>
-                <li>零配置模式下的模型回答是<b>录制回放</b>，会明确标注；想现场问任意问题请填 key</li>
+                <li>不跑 FastAPI 服务：静态站本身没有后端；填了 key 走浏览器直连（CORS 已实测），没填 key 走本站另部署的 Cloudflare Worker 代理（不是这个静态站的一部分）</li>
+                <li>零配置下的模型回答：站内代理额度内是<b>真答</b>，额度用完则回落到<b>录制回放</b>，两种都会在徽标上写明</li>
               </ul>
             </div>
           </div>
         </Panel>
 
-        <KeyBar llm={llm} note="key 只存在你自己浏览器的 localStorage，不会上传到任何中间服务器；本页所有模型调用都是浏览器直连服务商。零配置也能用：检索与评测在本地真跑，只有生成需要 key。" />
+        <KeyBar llm={llm} note="填了 key：只存在你自己浏览器的 localStorage，浏览器直连服务商，本站不中转；没填 key：走站内代理（本站自己的 Cloudflare Worker，密钥只在服务端），零配置也能真答。检索与评测本来就全在本地真跑。" />
 
         {err && (
           <Panel title="资产加载失败">
@@ -90,8 +90,8 @@ export function App() {
 
         {assets && (
           <>
-            <AskPanel assets={assets} llm={{ live: llm.live }} replayScripts={replay} />
-            <EvalPanel assets={assets} llm={{ live: llm.live }} />
+            <AskPanel assets={assets} llm={{ live: llm.live, mode: llm.mode }} replayScripts={replay} />
+            <EvalPanel assets={assets} llm={{ live: llm.live, mode: llm.mode }} />
 
             <Panel title="语料与资产自检" subtitle="页面上每个数字都来自这些文件；这里把它们摊开，方便你对账。">
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>

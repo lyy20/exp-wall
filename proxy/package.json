@@ -1,0 +1,19 @@
+{
+  "name": "expwall-llm-proxy",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "exp-wall 站点内 LLM 代理（Cloudflare Worker）：服务端 key + 每 IP 限流 + 每日预算闸门",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "kv:create": "wrangler kv namespace create RATE_KV",
+    "secret:deepseek": "wrangler secret put DEEPSEEK_API_KEY",
+    "secret:siliconflow": "wrangler secret put SILICONFLOW_API_KEY",
+    "test": "node test/harness.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.20.0"
+  }
+}

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { chatStream, describeError } from '../shared/llm/client';
 import { Badge, Chip, Panel } from '../shared/ui/core';
 import { ModeBadge, QuotaBar } from '../shared/ui/llm-ui';
+import type { LlmMode } from '../shared/llm/mode';
 
 const FORBIDDEN_L1 = ['两者相同', '完全等价', '证明', '必然', '一定优于', '没有任何差别', '效果相同', '可以断定'];
 
@@ -27,7 +28,7 @@ function check(text: string, level: Level) {
   return { ok: missing.length === 0 && forbidden.length === 0, missing, forbidden };
 }
 
-export function WordingPanel({ llm }: { llm: { live: boolean; keyDraft: string } }) {
+export function WordingPanel({ llm }: { llm: { live: boolean; mode: LlmMode; keyDraft: string } }) {
   const [text, setText] = useState(PRESETS[0].text);
   const [level, setLevel] = useState<Level>('SIGNIFICANT');
   const [busy, setBusy] = useState(false);
@@ -56,7 +57,7 @@ export function WordingPanel({ llm }: { llm: { live: boolean; keyDraft: string }
     <Panel
       title="措辞门禁：LLM 生成，代码判定"
       subtitle="这是「不许 LLM 判定自己输出」的落地形式。把措辞规则写成可执行检查器：LLM 写出来的结论必须通过它，通不过就是通不过 —— 页面不会因为「看起来挺像」就放行。"
-      right={<ModeBadge live={llm.live} />}
+      right={<ModeBadge mode={llm.mode} />}
     >
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
         {PRESETS.map((p) => (
@@ -94,10 +95,10 @@ export function WordingPanel({ llm }: { llm: { live: boolean; keyDraft: string }
             {busy ? '模型改写中…' : '让 LLM 试着重写成 ' + level}
           </button>
           <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-            {llm.live ? '会用你填的 key 真调模型，然后立刻用上面的检查器判它。' : '需要你自己的 key（本项目没有留下模型日志，所以这一块没有回放素材 —— 如实说明，不伪造）。'}
+            {llm.mode === 'byok' ? '会用你填的 key 真调模型，然后立刻用上面的检查器判它。' : llm.mode === 'proxy' ? '走站内代理真调模型（密钥在服务端），然后立刻用上面的检查器判它。' : '需要模型通道：站内代理不可用，请填你自己的 key（本项目没有留下模型日志，所以这一块没有回放素材 —— 如实说明，不伪造）。'}
           </span>
         </div>
-        <div style={{ marginTop: 10 }}><QuotaBar /></div>
+        <div style={{ marginTop: 10 }}><QuotaBar mode={llm.mode} /></div>
         {llmErr && <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--err)' }}>{llmErr.title}：{llmErr.detail}</p>}
         {llmOut && (
           <div className="dp-panel-tight" style={{ marginTop: 10, padding: 12, borderColor: llmVerdict?.ok ? 'var(--live)' : 'var(--err)' }}>

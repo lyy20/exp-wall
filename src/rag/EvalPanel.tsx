@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { describeError, embedTexts, normalize } from '../shared/llm/client';
 import { Badge, Panel, StatTile } from '../shared/ui/core';
 import { ModeBadge } from '../shared/ui/llm-ui';
+import type { LlmMode } from '../shared/llm/mode';
 import { f32FromBase64, type RagAssets } from './assets';
 import { retrieve, scoreOne } from './retrieve';
 
@@ -11,7 +12,7 @@ type Row = {
   pyRank?: number; pyMrr?: number; pyRecall5?: number; ms: number; fetched?: string[];
 };
 
-export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boolean } }) {
+export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boolean; mode: LlmMode } }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [progress, setProgress] = useState(0);
   const [running, setRunning] = useState(false);
@@ -42,7 +43,7 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
         const emb = await embedTexts(qs.map((q) => q.q));
         if (emb.dim !== dim) throw new Error('向量维度不一致：接口返回 ' + emb.dim + '，资产是 ' + dim + '（请用 BAAI/bge-m3）');
         for (let i = 0; i < qs.length; i++) vectors[i] = normalize(emb.vectors[i]);
-        setEmbedNote('查询向量由你的 key 真调 API 生成（' + emb.providerId + ' · ' + emb.model + '，' + emb.latencyMs.toFixed(0) + ' ms / ' + qs.length + ' 条）');
+        setEmbedNote('查询向量由' + (emb.providerId === 'proxy' ? '站内代理' : '你的 key') + '真调 API 生成（' + emb.model + '，' + emb.latencyMs.toFixed(0) + ' ms / ' + qs.length + ' 条）');
       } else {
         throw new Error('缺少 query_vectors.json（' + missing + '/' + qs.length + ' 题没有向量）。零配置下无法为任意问题算向量：请等资产补齐，或填入 embedding key 后重跑。');
       }
@@ -89,7 +90,7 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
     <Panel
       title="评测：20 题 Recall@5 / MRR（浏览器内真算）"
       subtitle="与项目 Python 侧完全同口径：dense(int8 去量化 top20) + BM25(过滤倒排 top20) → RRF(k=60) 融合取 top5；不跑 rerank。gold 全部落在本页 800 条子集内，因此数字可直接对齐。"
-      right={<ModeBadge live={llm.live} />}
+      right={<ModeBadge mode={llm.mode} />}
     >
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <button type="button" className="dp-btn dp-btn-primary" onClick={() => void run()} disabled={running}>

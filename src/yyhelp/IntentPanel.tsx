@@ -3,12 +3,13 @@ import { useMemo, useState } from 'react';
 import { chatStream, describeError } from '../shared/llm/client';
 import { Badge, Chip, Panel, StatTile } from '../shared/ui/core';
 import { ModeBadge } from '../shared/ui/llm-ui';
+import type { LlmMode } from '../shared/llm/mode';
 import type { YyAssets } from './assets';
 import { decide, ruleClassify } from './engine';
 
 const SAMPLES = ['我要退款', '运费怎么算', '运单号 EX1001TEST023 查不到', '多久能到', '怎么弄啊', '今天天气怎么样', '订单 1001 什么时候到'];
 
-export function IntentPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolean } }) {
+export function IntentPanel({ assets, llm }: { assets: YyAssets; llm: { live: boolean; mode: LlmMode } }) {
   const [text, setText] = useState('我要退款');
   const [llmIntent, setLlmIntent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,7 +50,7 @@ export function IntentPanel({ assets, llm }: { assets: YyAssets; llm: { live: bo
     <Panel
       title="意图路由台：规则优先，模型兜底"
       subtitle="这不是「让大模型分类」。项目里九类意图先过 13 条正则/关键词规则（权重最大的命中，权重 < 2 就弃权），只有弃权时才调用模型。下面每一条规则都在浏览器里真跑。"
-      right={<ModeBadge live={llm.live} liveLabel="可用模型兜底" replayLabel="纯规则模式" />}
+      right={<ModeBadge mode={llm.mode} liveLabel="可用模型兜底" replayLabel="纯规则模式" />}
     >
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input className="dp-input" style={{ flex: '1 1 340px' }} value={text} onChange={(e) => { setText(e.target.value); setLlmIntent(null); }} placeholder="说一句话，看它被路由到哪个出口…" />
