@@ -68,7 +68,7 @@
   且 `caps` 里不会出现 `embed` / `rerank`，前端自动只用 chat。
 - 上游连不上 → **502 `upstream-unreachable`**；上游非 2xx → **502 `upstream-<status>`** 并回传上游原文前 400 字。
 
-## 4. 本地验收（就这两条命令，缺一不可）
+## 4. 本地验收（就这三条命令，缺一不可）
 
 ```bash
 # ① Worker 单机测试：真 Worker 代码 + 假上游 + 内存 KV，41 条断言，不用联网、不用 key
@@ -78,6 +78,11 @@ node proxy/test/harness.mjs test
 node proxy/test/harness.mjs serve 8822      # mock 代理（测试默认用 8801 端口，互不打扰）
 npm run dev -- --port 5177 --strictPort     # 真前端（多入口站点，/rag/ 是 RAG 页）
 node proxy/test/ui-accept.mjs               # 38 条断言，exit 0 才算过
+
+# ③ 反向验收：**没有代理**时必须老实退化成「回放」（现在的线上就是这个状态）
+npm run build
+npx vite preview --port 5188 --strictPort   # 服务 dist，与 CI 产物同一份
+node proxy/test/replay-fallback.mjs         # 11 条断言，exit 0 才算过
 ```
 
 ① 测的是 Worker 本身（CORS、限流、预算、白名单、SSE 透传、usage 记账、额度响应头）；
@@ -85,7 +90,13 @@ node proxy/test/ui-accept.mjs               # 38 条断言，exit 0 才算过
 额度从 3 掉到 2 且页面上自己更新、连问 4 次第 4 次拿到 429 且提示「想继续问就填自己的 key」、
 另外两个 demo 页的徽标同样明写「站内代理」、页面无未捕获异常。
 
-两个脚本里的坑（踩过，别再踩）：
+③ 测的是**反向**：没配 `VITE_PROXY_BASE_URL` 时（= 你还没配 Worker 地址时的线上状态）页面必须老实退化成
+「回放」——徽标是「回放」且不出现「站内代理」徽标、不出现「站内额度：」、点「提问」按真实节奏逐字回放录制答案
+（采样到递增的中间态 + 流式光标）、明写「零配置：按真实节奏回放录制的模型输出…」、页面无未捕获异常。
+这条是 P5 改动的护栏：`ModeBadge` 的 `mode` 变必填、`AskPanel` 加了 streaming 分支之后，
+「没有代理」的路径必须和改动前一模一样。
+
+三条命令里的坑（踩过，别再踩）：
 
 - **限流按分钟分桶**：整套点击若跨过整分钟边界，第 4 次会落进新桶而被正常放行 → 断言假失败
   （指纹：服务端 `minute=3` 而 `day=4`，即 3 次在旧桶 + 1 次在新桶）。
