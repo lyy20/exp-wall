@@ -91,7 +91,10 @@ npm run preview  # 本地预览构建产物
 换域名或换代理地址只改 `site/wrangler.toml` 与 `deploy.mjs` 顶部的常量。CI 只管 GitHub Pages 那份（`BASE_PATH=/<仓库名>/`），`site/` 不参与 Actions。
 
 > 注意代理站点的来源白名单是 fail-closed 的：新域名要在 `proxy/wrangler.toml` 的 `ALLOWED_ORIGINS` 里加一行再 `npx wrangler deploy`，否则页面能开、接口一律 403。
-## 说明
+
+可选（当前没做，改的是仓库 secret，需要你自己决定）：让 CI 也顺手更新自有域名——加 `CLOUDFLARE_API_TOKEN`（Workers Scripts:Edit）与 `CLOUDFLARE_ACCOUNT_ID` 两个 secret，
+再加一个 workflow 跑 `npm ci && BASE_PATH="" VITE_PROXY_BASE_URL=https://llm.agent-lyy.top npm run build && npx wrangler deploy --config site/wrangler.toml`，
+这样一次 `git push` 就同时更新 GitHub Pages 与 agent-lyy.top 两份产物。## 说明
 
 - 页面内所有配图均为本地程序化生成，不依赖外部图片服务。
 - **API key 只存在于你自己浏览器的 localStorage**：填了 key 就是浏览器**直连厂商**（BYOK），页面不经过本站任何服务器，也不上传、不记录。
