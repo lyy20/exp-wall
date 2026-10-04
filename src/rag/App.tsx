@@ -62,7 +62,7 @@ export function App() {
                 <li>稠密检索：<span className="dp-mono">int8 去量化 × float32 查询</span> 的 800×1024 内积，浏览器里算</li>
                 <li>融合：RRF(k={cfg ? String(cfg.rrf_k) : '60'}) 取 top20 再截 top5</li>
                 <li>20 题评测：Recall@5 / MRR 在浏览器内逐题真算，并逐题与 Python 侧对照</li>
-                <li>有 key 时：查询向量真调 embedding、top20 真调 bge-reranker 精排、回答真调 LLM 流式生成</li>
+                <li>当前通道能调接口时：查询向量真调 embedding（1024 维）、top20 真调精排、回答真调 LLM 流式生成 —— 自填 key 直连厂商，或走本站的 Cloudflare Worker 代理（服务端另有闸门，页面上写明剩余额度）</li>
               </ul>
             </div>
             <div className="dp-panel-tight" style={{ padding: 14 }}>

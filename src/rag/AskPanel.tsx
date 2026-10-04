@@ -217,7 +217,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
   return (
     <Panel
       title="提问：浏览器内真检索 → 真生成"
-      subtitle="检索算子完全在本地跑（int8 去量化内积 + BM25 + RRF）。有 key 时查询向量与回答都真调接口；没 key 时查询向量取离线预计算那份，检索仍是真的，回答走录制回放。"
+      subtitle="检索算子完全在本地跑（int8 去量化内积 + BM25 + RRF）。查询向量、精排与回答按当前通道真调接口（自填 key 直连 / 站内代理）；两条通道都不通时才退回离线预计算向量与录制回放，徽标会写明是哪一条。"
       right={<ModeBadge mode={llm.mode} />}
     >
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

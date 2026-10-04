@@ -70,16 +70,19 @@ npm run preview  # 本地预览构建产物
 
 推送到 `main` 即自动构建并发布到 GitHub Pages（`actions/configure-pages` → `actions/upload-pages-artifact` → `actions/deploy-pages`），无需手动上传产物，也不需要提交 `dist/`。
 
-NaN
-因此子页（`/rag/` 等）的静态资源能正确解析；换仓库名或搬到自定义域名都不用改代码。
+构建时的资源前缀由环境变量 `BASE_PATH` 决定：`vite.config.ts` 里 `base: process.env.BASE_PATH || '/'`，CI 的 workflow 注入 `BASE_PATH=/<仓库名>/`，
+本地开发与预览用默认的 `/`。用的是**绝对 base**（不是相对 `'./'`）——相对 base 会让 `/rag/` 这类子目录里的 HTML 把 assets 解析到
+`/rag/assets/...` 从而 404。因此子页（`/rag/` 等）的静态资源能正确解析；换仓库名或搬到自定义域名都不用改代码。
 
 ## 说明
 
 - 页面内所有配图均为本地程序化生成，不依赖外部图片服务。
-- **API key 只存在于你自己浏览器的 localStorage**，页面没有后端、不上传、不记录；所有模型调用都是浏览器直连厂商。
-- 站内对真实调用做了限流（默认每分钟 6 次 / 每次会话 60 次 / 单次输出 ≤512 token），避免误触或脚本刷量。
-- 零配置也能用：检索、统计、契约门禁、评测都在本地真跑，只有「生成回答」这一步需要 key。
+- **API key 只存在于你自己浏览器的 localStorage**：填了 key 就是浏览器**直连厂商**（BYOK），页面不经过本站任何服务器，也不上传、不记录。
 - 没填 key 时也不是回放：本站另部署了一个 Cloudflare Worker 作为**站内代理**（自有域名 `llm.agent-lyy.top`，密钥只在服务端，
   浏览器里没有 key），在额度内直接真答并逐字流式；额度按 IP 3 次/分钟、30 次/天、全站 200 次/天，用完会明确返回 429 并提示你填自己的 key。
-  没配代理或额度用尽时才回落到录制回放，徽标会如实写明当前通道（站内代理 / 自填 key / 回放）。
+  选路优先级 = **自填 key 直连 > 站内代理 > 录制回放**，徽标永远如实写明当前是哪一条（站内代理 / 自填 key / 回放）。
+- 站内代理覆盖三条通道：chat（DeepSeek）、embedding（`@cf/baai/bge-m3`，1024 维）、精排（`@cf/baai/bge-reranker-base`，
+  有有效 `SILICONFLOW_API_KEY` 时优先用 SiliconFlow 的 bge-m3 / bge-reranker-v2-m3，失效才降级到 Workers AI，页面上照实显示真实模型名）。
+- 站内还有一层浏览器内的自限流（默认每分钟 6 次 / 每次会话 60 次 / 单次输出 ≤512 token），服务端另有独立闸门，避免误触或脚本刷量。
+- 零配置也能用：检索、统计、契约门禁、评测都在本地真跑 —— 不填 key、连站内代理都不通时，只有「生成回答」这一步退化成录制回放。
 - 三页数据都来自项目自己产出的真实文件（Milvus 导出的 bge-m3 向量、评测 CSV、报告台账 SQLite、真实工具信封），凡未做/改口径的地方都在页面上写明。
