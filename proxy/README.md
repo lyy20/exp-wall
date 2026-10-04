@@ -63,6 +63,7 @@
 ## 3. fail-closed 清单（宁可不服务，也不静默降级）
 
 - 没有 `Origin` 或不在白名单 → **403**（`origin-not-allowed`）；白名单只放行 `ALLOWED_ORIGINS` 里列出的站点 + 本机 `http://localhost:*` 与 `http://127.0.0.1:*`。
+  当前线上是三个来源：`https://lyy20.github.io`（GitHub Pages 那份）、`https://agent-lyy.top` 与 `https://www.agent-lyy.top`（自有域名根路径那份，站点由 `site/` 里的静态资源 Worker 提供）。加新域名 = 改 `proxy/wrangler.toml` 的 `ALLOWED_ORIGINS` 再 `npx wrangler deploy`。
 - `RATE_KV` 没绑 → **503 `config-missing-kv`**（没有计数就不放行，避免被刷爆）。
 - `DEEPSEEK_API_KEY` 没配 → **503 `config-missing-key`**。
 - embedding / rerank 的后端按模型名路由：`@cf/` 开头只走 Workers AI（没绑 `[ai]` → **503 `config-missing-ai`**）；

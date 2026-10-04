@@ -54,7 +54,9 @@ src/
   eap/                    EAP 页：assets.ts / ToolsPanel（契约门禁）/ StatsPanel（与 golden 对比）/ WordingPanel（措辞检查器）/ AuditPanel（证据链）
 public/tech/              程序化生成的科技配图（本地渲染，无外部图床依赖）
 public/data/{rag,yyhelp,eap}/  三个子页的离线资产（真语料子集、量化向量、契约与台账导出）
-.github/workflows/deploy.yml  GitHub Pages 自动部署
+.github/workflows/deploy.yml  GitHub Pages 自动部署（BASE_PATH=/exp-wall/）
+site/                    自有域名 agent-lyy.top 的发布配置：wrangler.toml（静态资源 Worker）+ deploy.mjs（一键构建并部署）
+proxy/                   站内代理 Worker（llm.agent-lyy.top）：CORS 白名单、限流、额度记账、SSE 透传
 ```
 
 ## 本地开发
@@ -74,6 +76,21 @@ npm run preview  # 本地预览构建产物
 本地开发与预览用默认的 `/`。用的是**绝对 base**（不是相对 `'./'`）——相对 base 会让 `/rag/` 这类子目录里的 HTML 把 assets 解析到
 `/rag/assets/...` 从而 404。因此子页（`/rag/` 等）的静态资源能正确解析；换仓库名或搬到自定义域名都不用改代码。
 
+### 两套发布目标（同一份源码）
+
+| 目标 | 地址 | 怎么发 | 资源前缀 |
+| --- | --- | --- | --- |
+| GitHub Pages（仓库页） | https://lyy20.github.io/exp-wall/ | 推 `main` → Actions 自动构建部署 | `/exp-wall/` |
+| 自有域名（Cloudflare Worker 静态资源） | https://agent-lyy.top/ | `node site/deploy.mjs` | `/` |
+
+`site/` 是一个 assets-only Worker（`[assets] directory = "../dist"`、`not_found_handling = "none"`，多入口站点不要 SPA 兜底），
+两条 `[[routes]]` 用 `custom_domain = true` 把 `agent-lyy.top` 与 `www.agent-lyy.top` 挂到 Cloudflare 账号上——DNS 记录与证书由 wrangler 自动创建，
+和 `llm.agent-lyy.top` 同一个做法，因此不需要手动配 DNS，也不受影响于国内到 `*.github.io` 的可达性。
+
+`site/deploy.mjs` 一条命令完成发布：先在仓库根目录以 `BASE_PATH=""` + `VITE_PROXY_BASE_URL=https://llm.agent-lyy.top` 构建，再在 `site/` 里 `npx wrangler deploy`。
+换域名或换代理地址只改 `site/wrangler.toml` 与 `deploy.mjs` 顶部的常量。CI 只管 GitHub Pages 那份（`BASE_PATH=/<仓库名>/`），`site/` 不参与 Actions。
+
+> 注意代理站点的来源白名单是 fail-closed 的：新域名要在 `proxy/wrangler.toml` 的 `ALLOWED_ORIGINS` 里加一行再 `npx wrangler deploy`，否则页面能开、接口一律 403。
 ## 说明
 
 - 页面内所有配图均为本地程序化生成，不依赖外部图片服务。

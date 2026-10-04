@@ -1,0 +1,23 @@
+# 作品集站点本体（把 ../dist 直接挂在自有域名的根路径上）
+# 为什么另起一个 Worker：GitHub Pages 只能挂在 /exp-wall/ 这个子路径下，且 github.io 在国内访问不稳；
+# 把构建产物直接用 Workers 静态资源挂在 agent-lyy.top 根路径，就能「单纯访问 agent-lyy.top」。
+# 同一个仓库仍然照常部署 GitHub Pages（那份用 BASE_PATH=/exp-wall/ 构建），两者互不影响。
+name = "expwall-site"
+compatibility_date = "2026-01-01"
+workers_dev = true
+
+# ../dist 由 node site/deploy.mjs（= 不设 BASE_PATH 的 npm run build）生成，
+# 相对路径按本文件所在目录解析。
+[assets]
+directory = "../dist"
+# 多入口站点：未知路径就老老实实 404，不要 SPA 兜底（会把 /rag/ 的 404 变成首页）
+not_found_handling = "none"
+
+# custom_domain = true 让 Cloudflare 自动建 DNS 记录并签发证书（和 llm.agent-lyy.top 一样）
+[[routes]]
+pattern = "agent-lyy.top"
+custom_domain = true
+
+[[routes]]
+pattern = "www.agent-lyy.top"
+custom_domain = true

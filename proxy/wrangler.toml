@@ -28,7 +28,8 @@ binding = "AI"
 
 [vars]
 # 只允许作品集站点调用（本机开发端口由 Worker 内部额外放行）
-ALLOWED_ORIGINS = "https://lyy20.github.io"
+# 两个来源都要留：GitHub Pages 那份（/exp-wall/）与自有域名根路径那份（agent-lyy.top，由 site/ 那个 Worker 提供）
+ALLOWED_ORIGINS = "https://lyy20.github.io,https://agent-lyy.top,https://www.agent-lyy.top"
 # 上游可选覆盖（测试用）；生产留空即用默认
 # UPSTREAM_BASE = "https://api.deepseek.com"
 # 想开放 embedding / 精排再多配一个 SILICONFLOW_API_KEY secret，并把上游换上：
