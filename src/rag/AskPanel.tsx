@@ -249,7 +249,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 11, color: 'var(--fg-faint)' }}>
         <input type="checkbox" checked={useRerank} onChange={(e) => setUseRerank(e.target.checked)} />
-        有 key 时叠加 bge-reranker-v2-m3 精排（评测口径不含精排，便于与 Python 对齐）
+        站内代理或自带 key 时叠加精排（bge-reranker-v2-m3 / @cf/baai/bge-reranker-base；评测口径不含精排，便于与 Python 对齐）
       </label>
 
       <div style={{ marginTop: 10 }}><QuotaBar mode={llm.mode} /></div>

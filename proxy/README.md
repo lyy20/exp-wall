@@ -25,8 +25,8 @@
 | --- | --- | --- |
 | GET | `/api/llm/status` | 能力（caps）、模型白名单、额度上下限、当前计数与剩余、usage 记账、服务器时间 |
 | POST | `/api/llm/chat` | 转发 `/chat/completions`，**SSE 逐字透传，绝不缓冲** |
-| POST | `/api/llm/embeddings` | 可选，需 `SILICONFLOW_API_KEY`（`BAAI/bge-m3`） |
-| POST | `/api/llm/rerank` | 可选，需 `SILICONFLOW_API_KEY`（`BAAI/bge-reranker-v2-m3`） |
+| POST | `/api/llm/embeddings` | `BAAI/bge-m3`（SiliconFlow）或 `@cf/baai/bge-m3`（Workers AI 兜底） |
+| POST | `/api/llm/rerank` | `BAAI/bge-reranker-v2-m3`（SiliconFlow）或 `@cf/baai/bge-reranker-base`（Workers AI 兜底） |
 | OPTIONS | 以上任意 | CORS 预检，`Access-Control-Max-Age: 3600` |
 
 - 服务端**强制**注入 `stream: true` 与 `stream_options.include_usage: true`，
@@ -64,14 +64,19 @@
 
 - 没有 `Origin` 或不在白名单 → **403**（`origin-not-allowed`）；白名单只放行 `ALLOWED_ORIGINS` 里列出的站点 + 本机 `http://localhost:*` 与 `http://127.0.0.1:*`。
 - `RATE_KV` 没绑 → **503 `config-missing-kv`**（没有计数就不放行，避免被刷爆）。
-- `DEEPSEEK_API_KEY` 没配 → **503 `config-missing-key`**；embedding / rerank 则是缺 `SILICONFLOW_API_KEY` → 503，
-  且 `caps` 里不会出现 `embed` / `rerank`，前端自动只用 chat。
+- `DEEPSEEK_API_KEY` 没配 → **503 `config-missing-key`**。
+- embedding / rerank 的后端按模型名路由：`@cf/` 开头只走 Workers AI（没绑 `[ai]` → **503 `config-missing-ai`**）；
+  其它走 SiliconFlow，但**上游 401/403（key 失效）且绑了 Workers AI 时会自动降级**，响应体里写真实模型名
+  （前端因此显示成「站内代理 · @cf/baai/bge-m3」，不冒充 SiliconFlow）。两边都不可用时才报
+  **502 `upstream-<status>`**，且 `caps` 里不会出现 `embed` / `rerank`，前端自动只用 chat。
 - 上游连不上 → **502 `upstream-unreachable`**；上游非 2xx → **502 `upstream-<status>`** 并回传上游原文前 400 字。
+- 任何未预料的异常（KV 写配额耗尽、账本解析失败、上游 fetch 抛错）→ **503 `proxy-degraded`**（人话 + 原始错误前 200 字），
+  而不是裸 500「Internal Server Error」—— 包装在 `src/index.ts` 的 `export default { fetch }` 里。
 
 ## 4. 本地验收（就这三条命令，缺一不可）
 
 ```bash
-# ① Worker 单机测试：真 Worker 代码 + 假上游 + 内存 KV，41 条断言，不用联网、不用 key
+# ① Worker 单机测试：真 Worker 代码 + 假上游 + 假 Workers AI + 内存 KV，56 条断言，不用联网、不用 key
 node proxy/test/harness.mjs test
 
 # ② 浏览器点击级验收：起两个后台进程，然后用真 Chrome 点「提问」
@@ -139,6 +144,11 @@ npx wrangler deploy                        # 输出形如 https://expwall-llm.<�
 > 同一个 Cloudflare IP 换成自有域名就通），GitHub 变量 `VITE_PROXY_BASE_URL` 已配，线上三页徽标均为「站内代理」。
 > 验收 = `LIVE=1 ACCEPT_URL=https://lyy20.github.io/exp-wall/rag/ STATUS_URL=https://llm.agent-lyy.top/api/llm/status ORIGIN=https://lyy20.github.io node proxy/test/ui-accept.mjs`
 > → **34 通过 / 0 失败**（无 key 访客真跑：逐字流式、额度递减、连点 4 次第 4 次 429、三页徽标一致）。
+>
+> 通道实测（2026-10-04 后续加固后）：`GET /api/llm/status` → caps `["chat","embed","rerank"]`；
+> `POST /api/llm/embeddings` → **200**（`provider: workers-ai` / `@cf/baai/bge-m3` / 1024 维）；
+> `POST /api/llm/rerank` → **200**（`@cf/baai/bge-reranker-base`）；`POST /api/llm/chat` → **200**（SSE 逐字，`deepseek-flash`）。
+> 三个通道都不吃彼此的额度：embedding / rerank 记在 `scope 'a'` 那一份上。
 
 部署后自查（三条，缺一不可）：
 
@@ -163,10 +173,15 @@ curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status" -H "Orig
   换成 `expwall-llm.<账号>.workers.dev` 直接被 RST（`curl: (35) Recv failure: Connection was reset`），手机流量同样不通。
   解法 = 自有域名挂 Custom Domain（本项目用 `llm.agent-lyy.top`，zone 在同一个 Cloudflare 账号里）。面试现场最稳的仍然是**自填 key 直连**。
 - KV 的 `get` / `put` 没有原子自增，并发下计数是近似的 —— 所以真正的兜底是全局日预算闸门。
-- **KV 免费档每天 1000 次写**，而一次成功 chat 会写 6 个键（minute/day/global + usage/p:/tokens）→ 真实日天花板约 **166 次**，
-  与站点文案写的 200 有差距；撞到后 `src/index.ts` 的 `export default { fetch }` 没有外层 try/catch，会变成裸 500 而不是干净的 429/503。
-  可选加固（未做）：把 6 次写压成 2 次 + 给 fetch 加错误包装（改动后需重跑 harness 41 条与 ui-accept 全量）。
-- 站内代理默认只覆盖 chat；embedding / 精排要么再配有效的 `SILICONFLOW_API_KEY`，要么在页面上填自己的 key。
-  **当前线上那个 SiliconFlow key 是无效的**（上游回 `401 {"code":30014,...,"message":"Token is invalid."}`）→ 前端已按下面的规则降级：
-  RAG 提问时 embedding 失败会回退到离线预计算向量（20 题评测与录制问答都能照常真跑检索 + 真生成），
-  精排失败则按 RRF 结果取前 5（与 Python 评测口径一致）。想对任意问题真算 embedding，请重签并 `npx wrangler secret put SILICONFLOW_API_KEY`。
+- **KV 免费档每天 1000 次写**：原来一次成功 chat 写 6 个键（minute/day/global + usage/p:/tokens）→ 真实日天花板约 **166 次**，
+  比站点文案写的 200 还低。现已改成**日账本**（`L:<scope>:<utcDay>` 一个 JSON 值）：
+  `consume()` = 1 get + 1 put（分钟桶 + 当日 per-IP + 全局计数都在账本里），`addUsage()` = 1 get + 1 put，
+  合起来**一次 chat 只写 2 个键** → 1000 ÷ 2 > 200，天花板回到全局闸门本身。
+  副作用两条：① 计数仍是读—改—写，KV 没有原子自增，并发下依旧是近似值（真正的兜底还是全局日预算）；
+  ② 换键名的那一天，旧的 `d:` / `g:` / `u:` / `t:` 键作废 → 当日计数会从 0 重新开始一次。
+  另外 `export default { fetch }` 现在有外层 try/catch，KV 故障时回 503 `proxy-degraded` 而不是裸 500。
+- **embedding / 精排现在有两条后端**：SiliconFlow（有有效 key 时优先）与 Workers AI（`[ai]` 绑定，免费档 10000 neurons/天，不需要额外 secret）。
+  **线上那个 SiliconFlow key 是无效的**（上游回 `401 {"code":30014,...,"message":"Token is invalid."}`），所以现在实际跑的是 Workers AI：
+  `@cf/baai/bge-m3` 出 1024 维查询向量、`@cf/baai/bge-reranker-base` 出精排分，页面上照实显示这两个模型名。
+  前端仍保留两条降级（离线预计算向量 / 按 RRF 取前 5）作为「连兜底也不可用」时的最后一道保险。
+  想让 embedding 换成 SiliconFlow 的 bge-m3（或 bge-reranker-v2-m3），重签一个有效 key 再 `npx wrangler secret put SILICONFLOW_API_KEY`，代码不用改。
