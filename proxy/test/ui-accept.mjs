@@ -343,7 +343,8 @@ async function main() {
     check("警示写明「下一次提问会被服务端明确拒绝（429）」", warn.indexOf("下一次提问会被服务端明确拒绝（429）") >= 0, warn.slice(0, 200));
 
     const r4 = await askOnce(cdp, QUESTION);
-    check("第 4 次页面上没有回答面板（没有偷偷回放一段答案）", r4.hasPanel === false && r4.text === "", "hasPanel=" + r4.hasPanel + " text=" + r4.text.slice(0, 60));
+    // 只看面板是否存在：采样循环最后一帧可能抓到上一轮遗留的流式光标（如 "…▍"），拿它当「有答案」是误判。
+    check("第 4 次页面上没有回答面板（没有偷偷回放一段答案）", r4.hasPanel === false, "hasPanel=" + r4.hasPanel + " lastSample=" + r4.text.slice(0, 60));
     check("第 4 次页面出现「站内额度用完」（describeError 的标题）", r4.body.indexOf("站内额度用完") >= 0, r4.body.slice(0, 300));
     check("第 4 次页面出现服务端原话「请求过于频繁」", r4.body.indexOf("请求过于频繁") >= 0, r4.body.slice(0, 300));
     check("第 4 次页面给出出路「想继续问就填自己的 key」（proxy.ts 的 hint，不是 KeyBar 的隐私文案）", r4.body.indexOf("想继续问就填自己的 key") >= 0, r4.body.slice(0, 400));
@@ -360,7 +361,11 @@ async function main() {
     // 子页路径必须从 ACCEPT_URL 反推：本地 dev 是根路径（/rag/ → /yyhelp/），
     // GitHub Pages 是项目子路径（/exp-wall/rag/ → /exp-wall/yyhelp/）。
     // 写死 "/yyhelp/" 时线上会访问 https://lyy20.github.io/yyhelp/（404 页），徽标检查全成假失败。
-    const basePath = new URL(ACCEPT_URL).pathname.replace(/[^/]*$/, "");
+    // 注意：pathname 以 "/" 结尾时，replace(/[^/]*$/, "") 匹配的是结尾的空串 —— 什么都删不掉（踩过）。
+    // 正确做法：去掉空段后弹出最后一节（rag），再拼回前缀。
+    const segs = new URL(ACCEPT_URL).pathname.split("/").filter(Boolean);
+    segs.pop();
+    const basePath = "/" + (segs.length ? segs.join("/") + "/" : "");
     const pages = [
       ["YYHelp 电商客服", basePath + "yyhelp/"],
       ["EAP 实验分析", basePath + "eap/"],

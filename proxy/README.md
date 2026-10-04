@@ -135,11 +135,16 @@ npx wrangler deploy                        # 输出形如 https://expwall-llm.<�
    构建期变量传进去，前端由此判定「有站内代理」。没配这个 variable 时取到空串 → 站点行为与纯静态站完全一致
    （回放），不会报错，只是没有站内代理。
 
+> 线上状态（2026-10-04）：Worker 已挂在自有域名 **https://llm.agent-lyy.top**（`*.workers.dev` 在国内被按 SNI 阻断，
+> 同一个 Cloudflare IP 换成自有域名就通），GitHub 变量 `VITE_PROXY_BASE_URL` 已配，线上三页徽标均为「站内代理」。
+> 验收 = `LIVE=1 ACCEPT_URL=https://lyy20.github.io/exp-wall/rag/ STATUS_URL=https://llm.agent-lyy.top/api/llm/status ORIGIN=https://lyy20.github.io node proxy/test/ui-accept.mjs`
+> → **34 通过 / 0 失败**（无 key 访客真跑：逐字流式、额度递减、连点 4 次第 4 次 429、三页徽标一致）。
+
 部署后自查（三条，缺一不可）：
 
 ```bash
 # 1) 白名单来源：期望 200，body 里有 caps / models / limits / remaining
-curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status" -H "Origin: https://lyy20.github.io"
+curl -i "https://llm.agent-lyy.top/api/llm/status" -H "Origin: https://lyy20.github.io"
 # 2) 不带 Origin：期望 403（fail-closed）
 curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status"
 # 3) 换一个不在白名单的 Origin：期望 403
@@ -154,7 +159,14 @@ curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status" -H "Orig
 
 - Worker + KV 都在免费额度内（每天 200 次 chat 的封顶远低于免费额度）。
 - 真正花钱的只有 LLM 充值：按输出 ≤512 token、每天 ≤200 次封顶，**每天不到 ¥1**；充 ¥10–20 能撑很久。
-- `*.workers.dev` 在国内网络下可达性不稳（这也是 P5-lite 先不买域名的原因：买域名只是换个入口，
-  不解决链路问题）。面试现场最稳的仍然是**自填 key 直连**；站内代理是「零配置也能真跑」的兜底。
+- **`*.workers.dev` 在国内被按域名（SNI）阻断**：实测同一任播 IP `104.16.124.96`，SNI 用 `www.cloudflare.com` 返回 200、
+  换成 `expwall-llm.<账号>.workers.dev` 直接被 RST（`curl: (35) Recv failure: Connection was reset`），手机流量同样不通。
+  解法 = 自有域名挂 Custom Domain（本项目用 `llm.agent-lyy.top`，zone 在同一个 Cloudflare 账号里）。面试现场最稳的仍然是**自填 key 直连**。
 - KV 的 `get` / `put` 没有原子自增，并发下计数是近似的 —— 所以真正的兜底是全局日预算闸门。
-- 站内代理默认只覆盖 chat；embedding / 精排要么再配 `SILICONFLOW_API_KEY`，要么在页面上填自己的 key。
+- **KV 免费档每天 1000 次写**，而一次成功 chat 会写 6 个键（minute/day/global + usage/p:/tokens）→ 真实日天花板约 **166 次**，
+  与站点文案写的 200 有差距；撞到后 `src/index.ts` 的 `export default { fetch }` 没有外层 try/catch，会变成裸 500 而不是干净的 429/503。
+  可选加固（未做）：把 6 次写压成 2 次 + 给 fetch 加错误包装（改动后需重跑 harness 41 条与 ui-accept 全量）。
+- 站内代理默认只覆盖 chat；embedding / 精排要么再配有效的 `SILICONFLOW_API_KEY`，要么在页面上填自己的 key。
+  **当前线上那个 SiliconFlow key 是无效的**（上游回 `401 {"code":30014,...,"message":"Token is invalid."}`）→ 前端已按下面的规则降级：
+  RAG 提问时 embedding 失败会回退到离线预计算向量（20 题评测与录制问答都能照常真跑检索 + 真生成），
+  精排失败则按 RRF 结果取前 5（与 Python 评测口径一致）。想对任意问题真算 embedding，请重签并 `npx wrangler secret put SILICONFLOW_API_KEY`。
