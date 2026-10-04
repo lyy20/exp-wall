@@ -48,16 +48,67 @@ export function minuteBucket(now: number): string {
   return String(Math.floor(now / MINUTE_MS));
 }
 
-export function minuteKey(ip: string, now: number, scope: Scope = 'c'): string {
-  return 'm:' + scope + ':' + ip + ':' + minuteBucket(now);
+// 分钟计数不再是独立的键：它作为 { b: 桶, n: 次数 } 存进日账本的 min 字段，见下面 Ledger。
+/**
+ * 日账本：把「当日 per-IP 计数 + 全局当日计数 + 当前分钟桶计数 + usage 账目」合并进**一个**键。
+ * 为什么要合并：Cloudflare KV 免费档每天 1000 次写。旧实现一次成功 chat 要写 6 个键
+ * （minute/day/global + u:/p:/t:）⇒ 真实天花板约 166 次/天，比站点宣传的 200 次全局闸门还低一截；
+ * 一个 RAG 提问还要再叠 embedding + rerank 两次 aux 计数，写次数会更早撞墙。
+ * 现在：一次成功 chat = 2 写（占用额度 1 写 + 记账 1 写），一次 aux 调用 = 1 写 ⇒ 天花板重新由闸门决定。
+ * 代价：所有计数都变成「读—改—写」同一个键，并发下更接近「近似计数」（KV 本来就没有原子自增，见文件头说明）。
+ */
+export interface Ledger {
+  /** 当日全局成功调用数（本 scope）。 */
+  n: number;
+  /** 当日 per-IP 成功调用数。 */
+  ips: Record<string, number>;
+  /** per-IP 的当前分钟桶计数：{ b: 分钟桶, n: 次数 }；桶不匹配即视为 0（旧桶条目写回时顺手清掉，值不会无限长大）。 */
+  min: Record<string, { b: string; n: number }>;
+  /** usage 账目（只有 chat 记账）：成功调用次数与 token 数。 */
+  calls: number;
+  prompt: number;
+  completion: number;
 }
 
-export function dayKey(ip: string, now: number, scope: Scope = 'c'): string {
-  return 'd:' + scope + ':' + ip + ':' + utcDay(now);
+export function ledgerKey(now: number, scope: Scope = 'c'): string {
+  return 'L:' + scope + ':' + utcDay(now);
 }
 
-export function globalKey(now: number, scope: Scope = 'c'): string {
-  return 'g:' + scope + ':' + utcDay(now);
+function emptyLedger(): Ledger {
+  return { n: 0, ips: {}, min: {}, calls: 0, prompt: 0, completion: 0 };
+}
+
+function safeCount(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+async function readLedger(kv: KVLike, now: number, scope: Scope = 'c'): Promise<Ledger> {
+  try {
+    const raw = await kv.get(ledgerKey(now, scope));
+    if (!raw) return emptyLedger();
+    const j = JSON.parse(raw) as Partial<Ledger>;
+    const ips: Record<string, number> = {};
+    if (j.ips && typeof j.ips === 'object') {
+      for (const [k, v] of Object.entries(j.ips)) {
+        const c = safeCount(v);
+        if (c > 0) ips[k] = c;
+      }
+    }
+    const min: Record<string, { b: string; n: number }> = {};
+    if (j.min && typeof j.min === 'object') {
+      for (const [k, v] of Object.entries(j.min)) {
+        const e = v as { b?: unknown; n?: unknown };
+        if (typeof e.b === 'string') min[k] = { b: e.b, n: safeCount(e.n) };
+      }
+    }
+    return { n: safeCount(j.n), ips, min, calls: safeCount(j.calls), prompt: safeCount(j.prompt), completion: safeCount(j.completion) };
+  } catch {
+    return emptyLedger();
+  }
+}
+
+async function writeLedger(kv: KVLike, now: number, scope: Scope, l: Ledger): Promise<void> {
+  await kv.put(ledgerKey(now, scope), JSON.stringify(l), { expirationTtl: 172800 });
 }
 
 /** aux 通道用的放宽版额度（数值仍然是同一份 Limits 派生的，改 LIMITS_JSON 会同时影响两个作用域）。 */
@@ -68,14 +119,6 @@ export function auxLimits(limits: Limits): Limits {
     perDay: limits.perDay * AUX_FACTOR,
     globalPerDay: limits.globalPerDay * AUX_FACTOR,
   };
-}
-
-export function usageKey(now: number): string {
-  return 'u:' + utcDay(now);
-}
-
-export function tokensKey(now: number): string {
-  return 't:' + utcDay(now);
 }
 
 export interface Counters {
@@ -99,23 +142,21 @@ export function msUntilUtcMidnight(now: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - now;
 }
 
-async function readCount(kv: KVLike, key: string): Promise<number> {
-  try {
-    const raw = await kv.get(key);
-    const n = raw === null ? 0 : Number.parseInt(raw, 10);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  } catch {
-    return 0;
-  }
+/** 三个计数（分钟 / 当日 per-IP / 当日全局）都从同一个日账本里读出来：1 次 get。 */
+async function readState(kv: KVLike, ip: string, now: number, scope: Scope): Promise<{ counters: Counters; ledger: Ledger }> {
+  const ledger = await readLedger(kv, now, scope);
+  const slot = ledger.min[ip];
+  const bucket = minuteBucket(now);
+  const counters: Counters = {
+    minute: slot && slot.b === bucket ? slot.n : 0,
+    day: ledger.ips[ip] || 0,
+    global: ledger.n,
+  };
+  return { counters, ledger };
 }
 
 export async function peek(kv: KVLike, ip: string, now: number, scope: Scope = 'c'): Promise<Counters> {
-  const tri = await Promise.all([
-    readCount(kv, minuteKey(ip, now, scope)),
-    readCount(kv, dayKey(ip, now, scope)),
-    readCount(kv, globalKey(now, scope)),
-  ]);
-  return { minute: tri[0], day: tri[1], global: tri[2] };
+  return (await readState(kv, ip, now, scope)).counters;
 }
 
 /** 纯函数判据：给定计数器决定放行还是拒绝（单测直接打这里）。 */
@@ -153,16 +194,25 @@ export function verdict(c: Counters, limits: Limits, now: number): Decision {
 }
 
 /** 判定并占用一次额度（拒绝时不占用）。 */
+/** 判定并占用一次额度（拒绝时不占用）：**只写一个键**（日账本），省 KV 写次数。 */
 export async function consume(kv: KVLike, ip: string, limits: Limits, now: number, scope: Scope = 'c'): Promise<Decision> {
-  const counters = await peek(kv, ip, now, scope);
+  const { counters, ledger } = await readState(kv, ip, now, scope);
   const d = verdict(counters, limits, now);
   if (!d.ok) return d;
   const next: Counters = { minute: counters.minute + 1, day: counters.day + 1, global: counters.global + 1 };
-  await Promise.all([
-    kv.put(minuteKey(ip, now, scope), String(next.minute), { expirationTtl: 120 }),
-    kv.put(dayKey(ip, now, scope), String(next.day), { expirationTtl: 172800 }),
-    kv.put(globalKey(now, scope), String(next.global), { expirationTtl: 172800 }),
-  ]);
+  const bucket = minuteBucket(now);
+  // 顺手清掉别的分钟桶（它们已经不参与判定），账本体积只跟「当分钟活跃 IP 数」有关
+  const min: Record<string, { b: string; n: number }> = { [ip]: { b: bucket, n: next.minute } };
+  for (const [key, slot] of Object.entries(ledger.min)) {
+    if (key !== ip && slot.b === bucket) min[key] = slot;
+  }
+  const nextLedger: Ledger = {
+    ...ledger,
+    n: next.global,
+    ips: { ...ledger.ips, [ip]: next.day },
+    min,
+  };
+  await writeLedger(kv, now, scope, nextLedger);
   d.counters = next;
   return d;
 }
@@ -173,13 +223,9 @@ export interface UsageTotals {
   completionTokens: number;
 }
 
-export async function readUsage(kv: KVLike, now: number): Promise<UsageTotals> {
-  const [calls, prompt, completion] = await Promise.all([
-    readCount(kv, usageKey(now)),
-    readCount(kv, 'p:' + utcDay(now)),
-    readCount(kv, tokensKey(now)),
-  ]);
-  return { calls, promptTokens: prompt, completionTokens: completion };
+export async function readUsage(kv: KVLike, now: number, scope: Scope = 'c'): Promise<UsageTotals> {
+  const l = await readLedger(kv, now, scope);
+  return { calls: l.calls, promptTokens: l.prompt, completionTokens: l.completion };
 }
 
 /** 记一次真实上游调用的 token 用量（记账，不影响放行判定）。 */
@@ -187,16 +233,15 @@ export async function addUsage(
   kv: KVLike,
   u: { promptTokens: number; completionTokens: number },
   now: number,
+  scope: Scope = 'c',
 ): Promise<void> {
-  const calls = await readCount(kv, usageKey(now));
-  const prompt = await readCount(kv, 'p:' + utcDay(now));
-  const completion = await readCount(kv, tokensKey(now));
-  const day = 172800;
-  await Promise.all([
-    kv.put(usageKey(now), String(calls + 1), { expirationTtl: day }),
-    kv.put('p:' + utcDay(now), String(prompt + Math.max(0, u.promptTokens)), { expirationTtl: day }),
-    kv.put(tokensKey(now), String(completion + Math.max(0, u.completionTokens)), { expirationTtl: day }),
-  ]);
+  const l = await readLedger(kv, now, scope);
+  await writeLedger(kv, now, scope, {
+    ...l,
+    calls: l.calls + 1,
+    prompt: l.prompt + safeCount(u.promptTokens),
+    completion: l.completion + safeCount(u.completionTokens),
+  });
 }
 
 export function limitsFrom(raw: string | undefined): Limits {

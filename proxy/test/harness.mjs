@@ -86,11 +86,48 @@ function fakeUpstream() {
 
 function kvShim() {
   const map = new Map();
-  return {
+  const shim = {
     _map: map,
+    // 免费档 KV 每天只有 1000 次写，所以「一次提问写几个键」是要被断言的产品指标，不是实现细节。
+    _puts: 0,
     async get(key) { return map.has(key) ? map.get(key) : null; },
-    async put(key, value) { map.set(key, value); },
+    async put(key, value) { shim._puts += 1; map.set(key, value); },
   };
+  return shim;
+}
+
+/**
+ * 假 Workers AI 绑定：形状照 Cloudflare 的真返回抄。
+ * bge-m3 → { data: number[][] }；bge-reranker → { response: [{ id, score }] }。
+ * 记录每次调用，用来断言「确实走了兜底」而不是「碰巧没报错」。
+ */
+function fakeAi() {
+  const calls = [];
+  return {
+    _calls: calls,
+    async run(model, inputs) {
+      calls.push({ model, inputs });
+      if (model === '@cf/baai/bge-m3') {
+        const texts = (inputs && inputs.text) || [];
+        return { shape: [texts.length, 1024], data: texts.map((t) => Array.from({ length: 1024 }, (_, d) => Math.sin(t.length + d * 0.01))) };
+      }
+      const contexts = (inputs && inputs.contexts) || [];
+      return { response: contexts.map((c, i) => ({ id: i, score: 1 - i * 0.1 })) };
+    },
+  };
+}
+
+/** 永远回 401 的假上游：模拟「SiliconFlow key 无效」这个线上真实故障（只有 embeddings/rerank 会打它）。 */
+function unauthorizedUpstream() {
+  const server = http.createServer(async (req, res) => {
+    await readBody(req);
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ code: 30014, data: null, message: 'Token is invalid.' }));
+  });
+  return new Promise((resolve, reject) => {
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
+  });
 }
 
 function adapter(worker, env, port, control) {
@@ -392,6 +429,74 @@ async function runTests() {
     const fourth = await post('/api/llm/chat', chatBody);
     const fj = await fourth.json();
     check('第 4 次提问的 chat 才 429（per-minute）', fourth.status === 429 && fj.error.code === 'per-minute', String(fourth.status) + ' ' + JSON.stringify(fj.error && fj.error.code));
+    await ctx.close();
+  }
+
+  console.log('== 8c. Workers AI 兜底（没有 SiliconFlow key 也能真算向量 / 真精排）');
+  {
+    const ai = fakeAi();
+    const ctx = await start({ AI: ai });
+    const st = await getStatus();
+    check('status：没有 SiliconFlow key 也报 embed/rerank 能力', st.json && JSON.stringify(st.json.caps) === '["chat","embed","rerank"]', JSON.stringify(st.json && st.json.caps));
+    check('status：模型清单切成 Workers AI 的 @cf 模型', st.json && JSON.stringify(st.json.embedModels) === '["@cf/baai/bge-m3"]' && JSON.stringify(st.json.rerankModels) === '["@cf/baai/bge-reranker-base"]', JSON.stringify(st.json && st.json.embedModels) + ' / ' + JSON.stringify(st.json && st.json.rerankModels));
+    const em = await post('/api/llm/embeddings', { model: '@cf/baai/bge-m3', input: ['甲', '乙'] });
+    const emJson = await em.json().catch(() => null);
+    check('兜底 embedding 200 且是 1024 维两行', em.status === 200 && emJson && emJson.data.length === 2 && emJson.data[0].embedding.length === 1024, String(em.status) + ' ' + JSON.stringify(emJson && emJson.data && emJson.data[0].embedding.length));
+    check('兜底 embedding 响应体回真实模型名（供前端如实显示）', emJson && emJson.model === '@cf/baai/bge-m3', String(emJson && emJson.model));
+    const rr = await post('/api/llm/rerank', { model: '@cf/baai/bge-reranker-base', query: 'q', documents: ['a', 'b', 'c'], top_n: 2 });
+    const rrJson = await rr.json().catch(() => null);
+    check('兜底 rerank 200 且按分降序取 top_n', rr.status === 200 && rrJson && rrJson.results.length === 2 && rrJson.results[0].relevance_score >= rrJson.results[1].relevance_score, String(rr.status) + ' ' + JSON.stringify(rrJson && rrJson.results));
+    check('兜底 rerank 响应体回真实模型名', rrJson && rrJson.model === '@cf/baai/bge-reranker-base', String(rrJson && rrJson.model));
+    check('确实调用了 Workers AI 绑定', ai._calls.length === 2 && ai._calls[0].model === '@cf/baai/bge-m3' && ai._calls[1].model === '@cf/baai/bge-reranker-base', JSON.stringify(ai._calls.map((c) => c.model)));
+    await ctx.close();
+  }
+
+  console.log('== 8d. SiliconFlow key 无效（上游 401）→ 自动降级到 Workers AI；没有 AI 则如实报错');
+  {
+    const bad = await unauthorizedUpstream();
+    const ai = fakeAi();
+    const ctx = await start({ AI: ai, SILICONFLOW_API_KEY: 'sk-bad', SILICONFLOW_BASE: 'http://127.0.0.1:' + bad.port });
+    const em = await post('/api/llm/embeddings', { model: 'BAAI/bge-m3', input: ['甲'] });
+    const emJson = await em.json().catch(() => null);
+    check('SiliconFlow 401 → embedding 走兜底 200', em.status === 200 && emJson && emJson.model === '@cf/baai/bge-m3', String(em.status) + ' ' + String(emJson && emJson.model));
+    const rr = await post('/api/llm/rerank', { model: 'BAAI/bge-reranker-v2-m3', query: 'q', documents: ['a', 'b'], top_n: 2 });
+    const rrJson = await rr.json().catch(() => null);
+    check('SiliconFlow 401 → rerank 走兜底 200', rr.status === 200 && rrJson && rrJson.model === '@cf/baai/bge-reranker-base', String(rr.status) + ' ' + String(rrJson && rrJson.model));
+    await ctx.close();
+
+    const ctx2 = await start({ SILICONFLOW_API_KEY: 'sk-bad', SILICONFLOW_BASE: 'http://127.0.0.1:' + bad.port });
+    const em2 = await post('/api/llm/embeddings', { model: 'BAAI/bge-m3', input: ['甲'] });
+    const em2Json = await em2.json().catch(() => null);
+    check('没有 AI 绑定时如实 502 upstream-401（不假装成功）', em2.status === 502 && em2Json && em2Json.error.code === 'upstream-401', String(em2.status) + ' ' + String(em2Json && em2Json.error && em2Json.error.code));
+    await ctx2.close();
+    await new Promise((r) => bad.server.close(r));
+  }
+
+  console.log('== 8e. KV 故障不再裸 500，而是 503 proxy-degraded');
+  {
+    const brokenKv = {
+      async get() { throw new Error('KV read failed'); },
+      async put() { throw new Error('KV write failed: daily limit exceeded'); },
+    };
+    const ctx = await start({ RATE_KV: brokenKv });
+    const ch = await post('/api/llm/chat', chatBody);
+    const j = await ch.json().catch(() => null);
+    check('KV 写失败 → 503 proxy-degraded（不是 500）', ch.status === 503 && j && j.error.code === 'proxy-degraded', String(ch.status) + ' ' + String(j && j.error && j.error.code));
+    check('错误信息是人话且带原始错误', !!(j && j.error.message && j.error.message.indexOf('proxy-degraded') < 0 && j.error.message.indexOf('KV') >= 0), String(j && j.error && j.error.message).slice(0, 120));
+    await ctx.close();
+  }
+
+  console.log('== 8f. KV 写次数：一次成功 chat 只写 2 个键（1000 写/天 不再压低全局闸门）');
+  {
+    const ctx = await start();
+    ctx.env.RATE_KV._puts = 0;
+    const res = await post('/api/llm/chat', chatBody);
+    await readSseWithTiming(res);
+    await sleep(150); // 等 ctx.waitUntil 里的记账落地（适配器在响应结束后才结算）
+    const st = await getStatus();
+    check('一次成功 chat 恰好 2 次 put（额度 1 + 记账 1）', ctx.env.RATE_KV._puts === 2, String(ctx.env.RATE_KV._puts));
+    check('只存在一个日账本键（L:c: 前缀）', Array.from(ctx.env.RATE_KV._map.keys()).filter((k) => k.indexOf('L:c:') === 0).length === 1, JSON.stringify(Array.from(ctx.env.RATE_KV._map.keys())));
+    check('当日计数与 usage 都从账本读出来', st.json && st.json.counters.day === 1 && st.json.counters.global === 1 && st.json.usage.calls === 1 && st.json.usage.completionTokens === 34, JSON.stringify({ c: st.json && st.json.counters, u: st.json && st.json.usage }));
     await ctx.close();
   }
 

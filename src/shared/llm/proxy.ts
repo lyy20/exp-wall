@@ -307,7 +307,7 @@ export async function embedViaProxy(
     throw new LlmError('proxy-unavailable', '站内代理连不上（' + base + '）：' + (err as Error).message);
   }
   if (!res.ok) throw await toError(res);
-  const json = (await res.json()) as { data?: { index?: number; embedding?: number[] }[] };
+  const json = (await res.json()) as { data?: { index?: number; embedding?: number[] }[]; model?: string };
   const rows = json.data || [];
   if (!rows.length) throw new LlmError('bad-response', '向量返回为空');
   const sorted = rows.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
@@ -315,7 +315,10 @@ export async function embedViaProxy(
   return {
     vectors,
     dim: vectors[0].length,
-    model,
+    // 用服务端回报的真实模型名：Worker 在 SiliconFlow 401/403 时会自动降级到 Workers AI，
+    // 那时的模型是 @cf/baai/bge-m3 而不是请求里写的 BAAI/bge-m3 —— 照写请求值会变成假标签，
+    // 页面上「查询向量」那一格就会冒充成 SiliconFlow 的模型名（诚实性优先级高于好看）。
+    model: json.model || model,
     providerId: 'proxy',
     latencyMs: performance.now() - started,
     live: true,
@@ -347,12 +350,13 @@ export async function rerankViaProxy(
     throw new LlmError('proxy-unavailable', '站内代理连不上（' + base + '）：' + (err as Error).message);
   }
   if (!res.ok) throw await toError(res);
-  const json = (await res.json()) as { results?: { index: number; relevance_score: number }[] };
+  const json = (await res.json()) as { results?: { index: number; relevance_score: number }[]; model?: string };
   const results = json.results || [];
   return {
     order: results.map((r) => r.index),
     scores: results.map((r) => r.relevance_score),
-    model,
+    // 同上：精排也可能被 Worker 降级到 @cf/baai/bge-reranker-base，标签以服务端回报为准。
+    model: json.model || model,
     providerId: 'proxy',
     latencyMs: performance.now() - started,
     live: true,

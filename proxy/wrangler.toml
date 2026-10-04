@@ -18,6 +18,14 @@ id = "5ffce11d92cb41e08acf995f7aa0a721"
 pattern = "llm.agent-lyy.top"
 custom_domain = true
 
+# ---- Workers AI 绑定（embedding / 精排的第二条后端）----
+# 为什么需要：SiliconFlow 的 key 一旦缺失或失效，/api/llm/embeddings 与 /api/llm/rerank 就整条断掉，
+# 访客的提问会卡在「拿查询向量」这一步。Workers AI 用同一个 Worker 的 [ai] 绑定兜底（免费档 10000 neurons/天），
+# 不需要额外 secret：SiliconFlow 有效时优先用它，401/403 时自动降级到 @cf/baai/bge-m3 与 @cf/baai/bge-reranker-base，
+# 响应体里回真实模型名，前端照实显示。
+[ai]
+binding = "AI"
+
 [vars]
 # 只允许作品集站点调用（本机开发端口由 Worker 内部额外放行）
 ALLOWED_ORIGINS = "https://lyy20.github.io"
