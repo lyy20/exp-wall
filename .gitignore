@@ -5,3 +5,7 @@ dist
 *.log
 .DS_Store
 Thumbs.db
+
+# Cloudflare Worker 本地状态与本地 secret（proxy/ 是独立包；.dev.vars 可能存着真 key，绝不能提交）
+.wrangler
+.dev.vars
