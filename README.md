@@ -83,18 +83,27 @@ npm run preview  # 本地预览构建产物
 | GitHub Pages（仓库页） | https://lyy20.github.io/exp-wall/ | 推 `main` → Actions 自动构建部署 | `/exp-wall/` |
 | 自有域名（Cloudflare Worker 静态资源） | https://agent-lyy.top/ | `node site/deploy.mjs` | `/` |
 
-`site/` 是一个 assets-only Worker（`[assets] directory = "../dist"`、`not_found_handling = "none"`，多入口站点不要 SPA 兜底），
+`site/` 是一个挂在自有域名上的 Worker：静态资源走 `[assets] directory = "../dist"`（`not_found_handling = "none"`，多入口站点不要 SPA 兜底），
+脚本部分（`site/src/index.js`）只接管 `/api/llm/*`（`run_worker_first`），用 service binding 把请求**同源**转给 `expwall-llm`。
 两条 `[[routes]]` 用 `custom_domain = true` 把 `agent-lyy.top` 与 `www.agent-lyy.top` 挂到 Cloudflare 账号上——DNS 记录与证书由 wrangler 自动创建，
 和 `llm.agent-lyy.top` 同一个做法，因此不需要手动配 DNS，也不受影响于国内到 `*.github.io` 的可达性。
 
-`site/deploy.mjs` 一条命令完成发布：先在仓库根目录以 `BASE_PATH=""` + `VITE_PROXY_BASE_URL=https://llm.agent-lyy.top` 构建，再在 `site/` 里 `npx wrangler deploy`。
+为什么模型接口要走同源：页面原本直接调第三个主机名 `llm.agent-lyy.top`，属于跨站请求，遇到隐私插件/网络拦截就只剩回放；
+换成 `/api/llm/*` 后请求落在自己域名上，不依赖第二个域名的可达性，也不需要 CORS。转发时会把访客 IP 带过去（`CF-Connecting-IP` + `x-forwarded-for`），
+否则所有访客会共用同一个限流桶；另外同源 GET 浏览器**不发** `Origin`，而代理是 fail-closed 的（没有 `Origin` 直接 403），
+所以站点 Worker 只在 `Sec-Fetch-Site: same-origin / same-site` 时替浏览器补上 `Origin` —— 非浏览器客户端与第三方站点依旧 403。
+
+`site/deploy.mjs` 一条命令完成发布：先在仓库根目录以 `BASE_PATH=""` + `VITE_PROXY_BASE_URL=same-origin` 构建，再在 `site/` 里 `npx wrangler deploy`。
+`VITE_PROXY_BASE_URL=same-origin` 是给自有域名这份用的特例（见 `src/shared/llm/proxy.ts` 的 `envBase()`）：用页面自己的域名，apex 与 www 各自调自己的 `/api/llm/*`，不用把主机名写死进构建产物。
 换域名或换代理地址只改 `site/wrangler.toml` 与 `deploy.mjs` 顶部的常量。CI 只管 GitHub Pages 那份（`BASE_PATH=/<仓库名>/`），`site/` 不参与 Actions。
 
 > 注意代理站点的来源白名单是 fail-closed 的：新域名要在 `proxy/wrangler.toml` 的 `ALLOWED_ORIGINS` 里加一行再 `npx wrangler deploy`，否则页面能开、接口一律 403。
 
 可选（当前没做，改的是仓库 secret，需要你自己决定）：让 CI 也顺手更新自有域名——加 `CLOUDFLARE_API_TOKEN`（Workers Scripts:Edit）与 `CLOUDFLARE_ACCOUNT_ID` 两个 secret，
-再加一个 workflow 跑 `npm ci && BASE_PATH="" VITE_PROXY_BASE_URL=https://llm.agent-lyy.top npm run build && npx wrangler deploy --config site/wrangler.toml`，
-这样一次 `git push` 就同时更新 GitHub Pages 与 agent-lyy.top 两份产物。## 说明
+再加一个 workflow 跑 `npm ci && BASE_PATH="" VITE_PROXY_BASE_URL=same-origin npm run build && npx wrangler deploy --config site/wrangler.toml`，
+这样一次 `git push` 就同时更新 GitHub Pages 与 agent-lyy.top 两份产物。
+
+## 说明
 
 - 页面内所有配图均为本地程序化生成，不依赖外部图片服务。
 - **API key 只存在于你自己浏览器的 localStorage**：填了 key 就是浏览器**直连厂商**（BYOK），页面不经过本站任何服务器，也不上传、不记录。

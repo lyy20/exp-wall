@@ -48,7 +48,12 @@ function strip(u: string): string {
 
 function envBase(): string {
   const raw = import.meta.env.VITE_PROXY_BASE_URL;
-  return typeof raw === 'string' ? strip(raw.trim()) : '';
+  if (typeof raw !== 'string') return '';
+  const v = raw.trim();
+  // 特例 'same-origin'：用页面自己的域名（自有域名部署走这条 —— /api/llm/* 由站点 Worker 同源转给代理 Worker，
+  // 既不跨站（不会被隐私插件/网络挡掉），也不用把主机名写死在构建产物里（apex 与 www 都能用）。
+  if (v === 'same-origin') return strip(window.location.origin);
+  return strip(v);
 }
 
 function urlBase(): string {

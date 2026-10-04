@@ -5,11 +5,20 @@
 name = "expwall-site"
 compatibility_date = "2026-01-01"
 workers_dev = true
+# 脚本只为了把 /api/llm/* 同源转给 expwall-llm（见 src/index.js），其余路径仍是纯静态资源。
+main = "src/index.js"
+
+# 同源转发：/api/llm/* 先给脚本（run_worker_first），其它路径不经过脚本，直接走静态资源。
+[[services]]
+binding = "LLM"
+service = "expwall-llm"
 
 # ../dist 由 node site/deploy.mjs（= 不设 BASE_PATH 的 npm run build）生成，
 # 相对路径按本文件所在目录解析。
 [assets]
 directory = "../dist"
+binding = "ASSETS"
+run_worker_first = ["/api/llm/*"]
 # 多入口站点：未知路径就老老实实 404，不要 SPA 兜底（会把 /rag/ 的 404 变成首页）
 not_found_handling = "none"
 
