@@ -7,7 +7,16 @@ workers_dev = true
 # 把命令输出的 id 填到下面（未绑定时 Worker 会按 fail-closed 拒绝服务）。
 [[kv_namespaces]]
 binding = "RATE_KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "5ffce11d92cb41e08acf995f7aa0a721"
+
+# ---- 自定义域名：生效中 ----
+# 背景：*.workers.dev 在国内被按域名（SNI）阻断（实测同一个 Cloudflare IP 104.16.124.96，
+# SNI=www.cloudflare.com 返回 200，SNI=*.workers.dev 直接 RST），所以改用自有域名。
+# agent-lyy.top 已托管在 Cloudflare（NS = garrett/pam.ns.cloudflare.com），custom_domain=true
+# 会让 Cloudflare 自动建 DNS 记录并签发证书，代码完全不用改。
+[[routes]]
+pattern = "llm.agent-lyy.top"
+custom_domain = true
 
 [vars]
 # 只允许作品集站点调用（本机开发端口由 Worker 内部额外放行）

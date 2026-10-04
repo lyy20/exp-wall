@@ -87,9 +87,20 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
 
       if (llm.live) {
         setStage('正在用你的 key 真算查询向量（embedding）…');
-        const emb = await embedTexts([q], { signal: ctrl.signal });
-        qVec = normalize(emb.vectors[0]);
-        embedInfo = { source: llm.mode === 'proxy' ? 'proxy' : 'key', model: (emb.providerId === 'proxy' ? '站内代理' : emb.providerId) + ' · ' + emb.model, latencyMs: emb.latencyMs };
+        try {
+          const emb = await embedTexts([q], { signal: ctrl.signal });
+          qVec = normalize(emb.vectors[0]);
+          embedInfo = { source: llm.mode === 'proxy' ? 'proxy' : 'key', model: (emb.providerId === 'proxy' ? '站内代理' : emb.providerId) + ' · ' + emb.model, latencyMs: emb.latencyMs };
+        } catch (embErr) {
+          // embedding 通道挂了（例如站内代理的 SiliconFlow key 失效 → 上游 401）不该让整个提问失败：
+          // 评测 20 题与录制问答都有离线预计算向量，回退到它之后检索与评测口径完全一致，
+          // 界面上如实标注「回退」，不假装是现算的。没有预置向量的问题才报错。
+          const fb = findQueryVector(assets, q);
+          if (!fb || fb.sim < 0.5) throw embErr;
+          qVec = normalize(f32FromBase64(fb.item.vec));
+          embedInfo = { source: 'precomputed', model: (assets.queryVectors?.model ?? 'bge-m3') + ' · 离线预计算（embedding 通道不可用，已回退）', sim: fb.sim };
+          setStage('embedding 通道不可用（' + describeError(embErr).title + '）→ 已回退到离线预计算向量，检索与评测口径不受影响，继续真跑…');
+        }
       } else {
         const found = findQueryVector(assets, q);
         if (!found || found.sim < 0.5) {
@@ -125,12 +136,18 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
       if (useRerank && llm.live) {
         setStage('真调 bge-reranker 精排 top20…');
         const tRe = performance.now();
-        const rr = await rerankDocs(q, hits.map((h) => h.chunk.text.slice(0, 900)), { topN: cfg.finalK, signal: ctrl.signal });
-        if (rr) {
-          top = rr.order.slice(0, cfg.finalK).map((i, rank) => ({ ...hits[i], rerankScore: rr.scores[rank], rerankRank: rank + 1 }));
-          rerankInfo = { applied: true, model: (rr.providerId === 'proxy' ? '站内代理' : rr.providerId) + ' · ' + rr.model, latencyMs: performance.now() - tRe };
-        } else {
-          rerankInfo = { applied: false, model: '本期未接入可用 rerank 服务商', note: 'RRF 融合结果直接作为最终结果（与评测口径一致）' };
+        try {
+          const rr = await rerankDocs(q, hits.map((h) => h.chunk.text.slice(0, 900)), { topN: cfg.finalK, signal: ctrl.signal });
+          if (rr) {
+            top = rr.order.slice(0, cfg.finalK).map((i, rank) => ({ ...hits[i], rerankScore: rr.scores[rank], rerankRank: rank + 1 }));
+            rerankInfo = { applied: true, model: (rr.providerId === 'proxy' ? '站内代理' : rr.providerId) + ' · ' + rr.model, latencyMs: performance.now() - tRe };
+          } else {
+            rerankInfo = { applied: false, model: '本期未接入可用 rerank 服务商', note: 'RRF 融合结果直接作为最终结果（与评测口径一致）' };
+          }
+        } catch (reErr) {
+          // 同 embedding：精排通道挂了不该让整个提问失败。RRF 融合结果直接当最终结果，界面上写明原因；
+          // 这也正是 Python 评测口径（评测本身不跑 rerank），数字仍然对得上。
+          rerankInfo = { applied: false, model: 'rerank 通道不可用（' + describeError(reErr).title + '）', note: '这一轮按 RRF 融合结果直接取前 5 —— 与 Python 评测口径一致' };
         }
       } else if (useRerank && !llm.live) {
         rerankInfo = { applied: false, model: '没有可用的 rerank 通道', note: '不精排，与 Python 评测口径一致（评测本身也不跑 rerank）' };

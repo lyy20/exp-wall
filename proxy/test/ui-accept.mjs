@@ -8,6 +8,13 @@
 // 环境变量：ACCEPT_URL（默认 http://localhost:5177/rag/?proxy=http://127.0.0.1:8822）、CDP_PORT（默认 9333）、
 //          ASK_TIMEOUT_MS（默认 20000）、TRACE=1（逐样本打印，排障用）
 //
+// 对**线上**站点跑（真 Worker + 真 DeepSeek，不需要 mock 控制面）：
+//   LIVE=1 ACCEPT_URL=https://lyy20.github.io/exp-wall/rag/ \
+//     STATUS_URL=https://llm.agent-lyy.top/api/llm/status ORIGIN=https://lyy20.github.io \
+//     CDP_PORT=9336 ASK_TIMEOUT_MS=45000 node proxy/test/ui-accept.mjs
+//   LIVE 模式下的差异：跳过 mock 清零、不检查假上游落款/注入文本/绝对 usage（真上游没有这些），
+//   其余断言（徽标、逐字流式、额度递减、第 4 次 429）一字不改 —— 这才是「线上线下同一套标准」。
+//
 // 断言口径（P0–P4 的同一套标准：真点击、真断言、结论可复核）：
 //   A 页面确实处于「无 key」状态，且徽标必须明写「站内代理」（不能拿回放冒充）
 //   B 点一次「提问」→ 回答面板先清空再重新渲染，且文字逐个变长到达（证明没有缓冲）
@@ -25,6 +32,10 @@ const ACCEPT_URL = process.env.ACCEPT_URL || "http://localhost:5177/rag/?proxy=h
 const STATUS_URL = process.env.STATUS_URL || "http://127.0.0.1:8822/api/llm/status";
 const RESET_URL = process.env.RESET_URL || "http://127.0.0.1:8822/__test/reset";
 const CDP_PORT = Number(process.env.CDP_PORT || 9333);
+// LIVE=1：对着线上站点 + 真 Worker 跑（没有 mock 控制面、返回里没有假上游落款、计数也不是从 0 开始）。
+const LIVE = process.env.LIVE === "1";
+// Worker 是 fail-closed 的（Origin 不在白名单就 403），所以 /status 也要带正确的 Origin。
+const ORIGIN = process.env.ORIGIN || "http://localhost:5177";
 const ASK_TIMEOUT_MS = Number(process.env.ASK_TIMEOUT_MS || 20000);
 const TRACE = process.env.TRACE === "1";
 const QUESTION = "CTRIP-SAC 的安全距离区间是多少？";
@@ -183,7 +194,7 @@ async function waitFor(cdp, expr, label, timeoutMs, intervalMs) {
 
 async function statusJson() {
   // Worker 是 fail-closed 的：没有 Origin（或不在白名单里）一律 403，所以这里要带上页面同源的 Origin
-  const res = await fetch(STATUS_URL, { headers: { Origin: "http://localhost:5177", Connection: "close" } });
+  const res = await fetch(STATUS_URL, { headers: { Origin: ORIGIN, Connection: "close" } });
   return res.json();
 }
 
@@ -234,15 +245,22 @@ async function askOnce(cdp, question) {
 }
 
 async function main() {
-  console.log("== UI 验收：无 key 访客点「提问」，走站内代理真跑一遍");
-  // 先把内存 KV 清零：mock 代理是常驻进程，上一轮验收/探针留下的计数会让
-  // 「刚好第 4 次被拒」「usage.calls === 3」这类绝对断言失真。
-  const resetRes = await fetch(RESET_URL, { method: "POST", headers: { Connection: "close" } });
-  const resetJson = await resetRes.json().catch(() => null);
-  check("mock 代理支持测试控制面（每次验收前清零计数）", resetRes.status === 200 && Boolean(resetJson && resetJson.ok), String(resetRes.status) + " " + JSON.stringify(resetJson));
-  const st0 = await statusJson();
-  check("mock 代理在线且开了 chat 通道", Boolean(st0.ok) && st0.caps.indexOf("chat") >= 0, JSON.stringify(st0.caps));
-  check("起点干净：计数 0/0、额度满格 3/30/200", st0.counters.minute === 0 && st0.counters.day === 0 && st0.counters.global === 0 && st0.remaining.minute === 3 && st0.remaining.day === 30, JSON.stringify(st0.counters) + " " + JSON.stringify(st0.remaining));
+  console.log(LIVE ? "== 线上验收：无 key 访客点「提问」，走真 Worker（自有域名）" : "== UI 验收：无 key 访客点「提问」，走站内代理真跑一遍");
+  let st0;
+  if (LIVE) {
+    st0 = await statusJson();
+    check("线上 Worker 在线且开了 chat 通道（Origin 白名单生效）", Boolean(st0.ok) && st0.caps.indexOf("chat") >= 0, JSON.stringify(st0.caps));
+    console.log("  （LIVE：本分钟已用 " + st0.counters.minute + "，当日 " + st0.counters.day + "/" + (st0.limits ? st0.limits.perDay : "?") + "，全站 " + st0.counters.global + "/" + (st0.limits ? st0.limits.globalPerDay : "?") + "）");
+  } else {
+    // 先把内存 KV 清零：mock 代理是常驻进程，上一轮验收/探针留下的计数会让
+    // 「刚好第 4 次被拒」「usage.calls === 3」这类绝对断言失真。
+    const resetRes = await fetch(RESET_URL, { method: "POST", headers: { Connection: "close" } });
+    const resetJson = await resetRes.json().catch(() => null);
+    check("mock 代理支持测试控制面（每次验收前清零计数）", resetRes.status === 200 && Boolean(resetJson && resetJson.ok), String(resetRes.status) + " " + JSON.stringify(resetJson));
+    st0 = await statusJson();
+    check("mock 代理在线且开了 chat 通道", Boolean(st0.ok) && st0.caps.indexOf("chat") >= 0, JSON.stringify(st0.caps));
+    check("起点干净：计数 0/0、额度满格 3/30/200", st0.counters.minute === 0 && st0.counters.day === 0 && st0.counters.global === 0 && st0.remaining.minute === 3 && st0.remaining.day === 30, JSON.stringify(st0.counters) + " " + JSON.stringify(st0.remaining));
+  }
 
   const browser = findBrowser();
   const profile = mkdtempSync(join(tmpdir(), "expwall-accept-"));
@@ -289,9 +307,13 @@ async function main() {
     check("点击后回答面板先清空再重新渲染（新的一轮真的开始了）", r1.cleared && r1.hasPanel, "cleared=" + r1.cleared + " hasPanel=" + r1.hasPanel);
     check("回答逐字到达（≥3 个长度递增的中间态）", r1.samples.length >= 3, JSON.stringify(r1.samples));
     check("采样期间页面上出现过流式光标", r1.sawCaret === true, String(r1.sawCaret));
-    check("回答内容来自上游（假上游的落款）", r1.text.indexOf("本地假上游") >= 0, r1.text.slice(0, 120));
-    check("服务端注入了 stream_options.include_usage", r1.text.indexOf("include_usage") >= 0, r1.text.slice(0, 200));
-    check("服务端把 max_tokens 夹到 512", r1.text.indexOf("max_tokens=512") >= 0, r1.text.slice(0, 200));
+    if (LIVE) {
+      check("回答内容来自真上游（非空且是像样的答复）", r1.text.trim().length >= 20, r1.text.slice(0, 120));
+    } else {
+      check("回答内容来自上游（假上游的落款）", r1.text.indexOf("本地假上游") >= 0, r1.text.slice(0, 120));
+      check("服务端注入了 stream_options.include_usage", r1.text.indexOf("include_usage") >= 0, r1.text.slice(0, 200));
+      check("服务端把 max_tokens 夹到 512", r1.text.indexOf("max_tokens=512") >= 0, r1.text.slice(0, 200));
+    }
     // 额度数字靠 QuotaBar 的 1.5s ticker 刷新，不能立刻断言，要等它自己掉下来
     let barAfter = "";
     try {
@@ -301,13 +323,19 @@ async function main() {
     check("详情栏的站内额度自己掉到 2（不需要重新提问才更新）", barAfter.indexOf("站内额度：本分钟剩 2/3") >= 0, barAfter);
     const st1 = await statusJson();
     check("服务端计数：chat 只记了 1 次", st1.counters.minute === 1 && st1.remaining.minute === 2, JSON.stringify(st1.counters));
-    check("服务端 usage 记账：1 次调用 · 12 prompt / 34 completion", st1.usage.calls === 1 && st1.usage.promptTokens === 12 && st1.usage.completionTokens === 34, JSON.stringify(st1.usage));
+    if (LIVE) {
+      check("服务端 usage 记账：确实累计了 token（浏览器里没有 key 也有账）", st1.usage.calls >= 1 && st1.usage.promptTokens > 0 && st1.usage.completionTokens > 0, JSON.stringify(st1.usage));
+    } else {
+      check("服务端 usage 记账：1 次调用 · 12 prompt / 34 completion", st1.usage.calls === 1 && st1.usage.promptTokens === 12 && st1.usage.completionTokens === 34, JSON.stringify(st1.usage));
+    }
 
     console.log("== E/F. 连问 4 次：第 4 次必须被服务端拒绝");
+    // 真上游的回答里不会有假上游的落款，所以 LIVE 下退化成「有像样的正文」
+    const okAnswer = (s) => (LIVE ? s.trim().length >= 10 : s.indexOf("本地假上游") >= 0);
     const r2 = await askOnce(cdp, QUESTION);
-    check("第 2 次提问正常出答案", r2.text.indexOf("本地假上游") >= 0, r2.text.slice(0, 80));
+    check("第 2 次提问正常出答案", okAnswer(r2.text), r2.text.slice(0, 80));
     const r3 = await askOnce(cdp, QUESTION);
-    check("第 3 次提问正常出答案", r3.text.indexOf("本地假上游") >= 0, r3.text.slice(0, 80));
+    check("第 3 次提问正常出答案", okAnswer(r3.text), r3.text.slice(0, 80));
     const st3 = await statusJson();
     check("服务端计数：3 次（额度刚好用完）", st3.counters.minute === 3 && st3.remaining.minute === 0, JSON.stringify(st3.counters));
     const warn = await cdp.eval("__acc.bodyText()");
@@ -321,7 +349,7 @@ async function main() {
     check("第 4 次页面给出出路「想继续问就填自己的 key」（proxy.ts 的 hint，不是 KeyBar 的隐私文案）", r4.body.indexOf("想继续问就填自己的 key") >= 0, r4.body.slice(0, 400));
     check("第 4 次徽标仍是「站内代理」（额度用完不等于退回回放）", r4.badges.filter((b) => b === "站内代理").length >= 1, JSON.stringify(r4.badges));
     const st4 = await statusJson();
-    check("服务端计数停在第 3 次（第 4 次没被放行）", st4.counters.minute === 3 && st4.usage.calls === 3, JSON.stringify(st4.counters) + " " + JSON.stringify(st4.usage));
+    check("服务端计数停在第 3 次（第 4 次没被放行）", st4.counters.minute === 3 && (LIVE ? st4.remaining.minute === 0 : st4.usage.calls === 3), JSON.stringify(st4.counters) + " " + JSON.stringify(st4.usage));
     // 若是跨了分钟桶，上面 E/F 的失败都是测试自身的假失败（不是产品问题）—— 明确标出来，别让人误读
     const bucketAtEnd = Math.floor(Date.now() / 60000);
     check("整轮点击没有跨分钟桶（跨桶会让第 4 次被误放行，属测试假失败，重跑即可）", bucketAtEnd === bucketAtStart, "bucket " + bucketAtStart + " -> " + bucketAtEnd);
@@ -329,9 +357,13 @@ async function main() {
     console.log("== G. 另外两个 demo 页的徽标必须同样明写「站内代理」（不能各页各说各话）");
     const origin = new URL(ACCEPT_URL).origin;
     const proxyQ = new URL(ACCEPT_URL).searchParams.get("proxy");
+    // 子页路径必须从 ACCEPT_URL 反推：本地 dev 是根路径（/rag/ → /yyhelp/），
+    // GitHub Pages 是项目子路径（/exp-wall/rag/ → /exp-wall/yyhelp/）。
+    // 写死 "/yyhelp/" 时线上会访问 https://lyy20.github.io/yyhelp/（404 页），徽标检查全成假失败。
+    const basePath = new URL(ACCEPT_URL).pathname.replace(/[^/]*$/, "");
     const pages = [
-      ["YYHelp 电商客服", "/yyhelp/"],
-      ["EAP 实验分析", "/eap/"],
+      ["YYHelp 电商客服", basePath + "yyhelp/"],
+      ["EAP 实验分析", basePath + "eap/"],
     ];
     for (const [name, path] of pages) {
       const url = origin + path + (proxyQ ? "?proxy=" + encodeURIComponent(proxyQ) : "");
