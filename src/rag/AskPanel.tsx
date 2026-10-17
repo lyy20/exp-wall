@@ -2,8 +2,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { chatStream, describeError, embedTexts, normalize, rerankDocs } from '../shared/llm/client';
 import { matchReplay, playText } from '../shared/replay';
-import { Badge, Chip, KeyValue, Panel, StatTile } from '../shared/ui/core';
-import { ModeBadge, QuotaBar } from '../shared/ui/llm-ui';
+import { Chip, KeyValue, Panel } from '../shared/ui/core';
+import { ModeBadge } from '../shared/ui/llm-ui';
 import type { LlmMode } from '../shared/llm/mode';
 import { findQueryVector, f32FromBase64, type RagAssets } from './assets';
 import { retrieve, type Chunk, type Stages } from './retrieve';
@@ -58,7 +58,6 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
   const [answer, setAnswer] = useState('');
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<{ title: string; detail: string } | null>(null);
-  const [useRerank, setUseRerank] = useState(true);
   const [openChunk, setOpenChunk] = useState<number | null>(null);
   const abort = useRef<AbortController | null>(null);
 
@@ -133,7 +132,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
       let top = hits.slice(0, cfg.finalK);
 
       let rerankInfo: Result['rerank'] | undefined;
-      if (useRerank && llm.live) {
+      if (llm.live) {
         setStage('真调 bge-reranker 精排 top20…');
         const tRe = performance.now();
         try {
@@ -149,7 +148,7 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
           // 这也正是 Python 评测口径（评测本身不跑 rerank），数字仍然对得上。
           rerankInfo = { applied: false, model: 'rerank 通道不可用（' + describeError(reErr).title + '）', note: '这一轮按 RRF 融合结果直接取前 5 —— 与 Python 评测口径一致' };
         }
-      } else if (useRerank && !llm.live) {
+      } else if (!llm.live) {
         rerankInfo = { applied: false, model: '没有可用的 rerank 通道', note: '不精排，与 Python 评测口径一致（评测本身也不跑 rerank）' };
       }
 
@@ -210,14 +209,14 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
       abort.current = null;
       void t0;
     }
-  }, [assets, busy, goldById, llm.live, replayScripts, useRerank]);
+  }, [assets, busy, goldById, llm.live, replayScripts]);
 
-  const examples = (assets.queryVectors?.items ?? []).filter((it) => it.q).slice(0, 6);
+  const examples = (assets.queryVectors?.items ?? []).filter((it) => it.q).slice(0, 3);
 
   return (
     <Panel
-      title="提问：浏览器内真检索 → 真生成"
-      subtitle="检索算子完全在本地跑（int8 去量化内积 + BM25 + RRF）。查询向量、精排与回答按当前通道真调接口（自填 key 直连 / 站内代理）；两条通道都不通时才退回离线预计算向量与录制回放，徽标会写明是哪一条。"
+      title="问一句：答案带原文引用"
+      subtitle="检索在你的浏览器里真跑，回答真调模型：检索片段来自 55 篇论文的真实语料，引用编号可点开原文核对。"
       right={<ModeBadge mode={llm.mode} />}
     >
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -247,12 +246,6 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
         ))}
       </div>
 
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 11, color: 'var(--fg-faint)' }}>
-        <input type="checkbox" checked={useRerank} onChange={(e) => setUseRerank(e.target.checked)} />
-        站内代理或自带 key 时叠加精排（bge-reranker-v2-m3 / @cf/baai/bge-reranker-base；评测口径不含精排，便于与 Python 对齐）
-      </label>
-
-      <div style={{ marginTop: 10 }}><QuotaBar mode={llm.mode} /></div>
       {stage && <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--replay)' }}>{stage}</p>}
       {error && (
         <div className="dp-panel-tight" style={{ marginTop: 10, padding: 12, borderColor: 'var(--err)' }}>
@@ -263,25 +256,12 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
 
       {result && (
         <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
-            <StatTile label="检索耗时" value={fmtMs(result.timings.retrieveMs)} sub={result.stages.dense.length + ' dense / ' + result.stages.sparse.length + ' sparse / ' + result.stages.fused.length + ' 融合'} tone="live" />
-            <StatTile label="查询向量" value={result.embed.source === 'precomputed' ? '离线预计算' : result.embed.source === 'proxy' ? '真调 API（站内代理）' : '真调 API'} sub={result.embed.model + (result.embed.sim !== undefined ? ' · 匹配 ' + result.embed.sim.toFixed(3) : '')} tone={result.embed.source === 'precomputed' ? 'replay' : 'live'} />
-            <StatTile
-              label="生成"
-              value={result.answerMode === 'live' ? '实时' : result.answerMode === 'streaming' ? '生成中' : result.answerMode === 'replay' ? '回放' : '未生成'}
-              sub={result.provenance || '需要 key 才能实时生成'}
-              tone={result.answerMode === 'live' || result.answerMode === 'streaming' ? 'live' : 'replay'}
-            />
-            <StatTile label="精排" value={result.rerank?.applied ? '已启用' : '未启用'} sub={result.rerank?.model || '—'} tone={result.rerank?.applied ? 'live' : 'neutral'} />
-          </div>
+          <p className="dp-mono" style={{ margin: 0, fontSize: 11, color: 'var(--fg-faint)' }}>
+            检索 {fmtMs(result.timings.retrieveMs)} · 命中 {result.hits.slice(0, assets.config.top_k).length} 条 · 精排{result.rerank?.applied ? '已启用' : '未启用'} · 生成{result.answerMode === 'live' ? '实时' : result.answerMode === 'streaming' ? '中' : result.answerMode === 'replay' ? '回放' : '未生成'}
+          </p>
 
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <Badge tone="live">检索命中 top {result.hits.slice(0, assets.config.top_k).length}</Badge>
-              <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-                查询分词 {result.tokens.length} 个（CJK bigram）：{result.tokens.slice(0, 14).join(' / ')}{result.tokens.length > 14 ? ' …' : ''}
-              </span>
-            </div>
+            <p style={{ margin: '0 0 8px', fontSize: 11, color: 'var(--fg-faint)' }}>检索片段（点「原文」可展开全文核对引用）</p>
             <div style={{ display: 'grid', gap: 8 }}>
               {result.hits.slice(0, assets.config.top_k).map((h, i) => (
                 <div key={h.idx} className="dp-panel-tight" style={{ padding: 12 }}>
@@ -321,11 +301,6 @@ export function AskPanel({ assets, llm, replayScripts }: { assets: RagAssets; ll
               {answer || (busy ? '…' : '（无）')}
               {busy && <span className="dp-caret">▍</span>}
             </p>
-            {result.usage && (
-              <p className="dp-mono" style={{ margin: '8px 0 0', fontSize: 10.5, color: 'var(--fg-faint)' }}>
-                prompt {result.usage.promptTokens} tok · completion {result.usage.completionTokens} tok · 首 token {fmtMs(result.timings.firstTokenMs)} · 总耗时 {fmtMs(result.timings.answerMs)}
-              </p>
-            )}
           </div>
 
           {result.evalRef && (

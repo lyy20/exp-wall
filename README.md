@@ -3,22 +3,21 @@
 在线预览 👉 **https://lyy20.github.io/exp-wall/**
 
 一个深色主题的单页作品集（全屏 Hero、横向滚动图带、逐字渐显的自我介绍、Framer Motion 粘性堆叠项目卡，底衬 Three.js 粒子星空 + 布料式鼠标斥力 + 点击彩色墨水），
-并在这一个域名、一个仓库里额外交付了 **3 个可交互的项目 Demo 页**：把三个真实项目里「不需要后端也能真跑」的部分搬进浏览器。
+并在这一个域名、一个仓库里额外交付了 **2 个可交互的项目 Demo 页**：把真实项目里「不需要后端也能真跑」的部分搬进浏览器。
 
-| 入口 | 地址 | 这页真跑什么 |
+| 入口 | 地址 | 这页能做什么 |
 | --- | --- | --- |
-| 作品集首页 | https://lyy20.github.io/exp-wall/ | 主视觉 + 4 张项目卡（每张卡都有「进入交互 Demo」跳转）+ 3 块迷你面板（点一下就能看到真算/真跑） |
-| 科研实验分析助手 Agent | https://lyy20.github.io/exp-wall/eap/ | 8 工具四段式契约门禁、9 类错误语义、10 条真实 episode 序列 × 6 统计量与 Python numpy/scipy golden 逐项对比、Welch t 检验、报告台账与证据链 |
-| YYHelp 电商智能客服 | https://lyy20.github.io/exp-wall/yyhelp/ | 13 条正则规则路由、5 个工具的校验/统一信封/只读登记/写操作确认与幂等重放、ReAct 终止条件、17 组真实对话回放 |
-| 科研文献 RAG 问答 | https://lyy20.github.io/exp-wall/rag/ | 分词 → BM25 → int8 去量化内积 → RRF 融合的完整检索链路 + 20 题 Recall@5 / MRR 在浏览器内重算并与 Python 侧逐题对照 |
+| 作品集首页 | https://lyy20.github.io/exp-wall/ | 主视觉 + 3 张项目卡 + 2 块迷你面板（滚到就自动真跑，不用点按钮） |
+| YYHelp 电商智能客服 | https://lyy20.github.io/exp-wall/yyhelp/ | 多轮对话回放 + 现场跑一轮：规则路由、5 个工具的参数校验与统一信封、写操作确认、幂等重放 |
+| 科研文献 RAG 问答 | https://lyy20.github.io/exp-wall/rag/ | 问一句 → 真检索 → 真模型作答，答案带可展开的原文引用；20 题 Recall@5 / MRR 在浏览器里重算并与 Python 侧对照 |
 
-每页开头都写清了「**真跑什么 / 刻意没做什么**」，不把演示说成产品。
+两页都把「真跑什么」写在能验证的位置（数字、引用、工具返回），不把演示说成产品。
 
 ## 技术栈
 
 | 层 | 选型 |
 | --- | --- |
-| 框架 | React 18.3.1 + TypeScript 5.6 + Vite 5.4（多入口：`index.html` / `rag/` / `yyhelp/` / `eap/`） |
+| 框架 | React 18.3.1 + TypeScript 5.6 + Vite 5.4（多入口：`index.html` / `rag/` / `yyhelp/`） |
 | 样式 | TailwindCSS 3.4.1 + PostCSS/Autoprefixer + 一套共享设计令牌（`src/shared/styles/tokens.css`） |
 | 动效 | Framer Motion 12.38.0（whileInView / useScroll / useTransform）、GSAP 3.12（ticker） |
 | 3D | Three.js 0.128（6000 点粒子星云） |
@@ -35,8 +34,8 @@ src/
     HeroSection.tsx       全屏主视觉 + 导航 + 身份行
     MarqueeSection.tsx    两行横向滚动图带（滚动驱动 translateX）
     AboutSection.tsx      自我介绍（逐字滚动透明度）
-    ProjectsSection.tsx   4 张粘性堆叠项目卡（01-03 有「进入交互 Demo」，04 指向公开仓库）
-    DemoPanels.tsx        首页三块迷你面板：真算统计 / 真跑客服一轮 / 真跑检索链路
+    ProjectsSection.tsx   3 张粘性堆叠项目卡（01-02 有「进入交互 Demo」，03 指向公开仓库）
+    DemoPanels.tsx        首页两块迷你面板：滚进视口自动跑（客服一轮 / 检索链路），无按钮
     StarField.tsx / ClothEffect.tsx / ClickInk.tsx / FadeIn.tsx / AnimatedText.tsx / ContactButton.tsx
   shared/
     asset.ts              BASE_URL 资源解析 + 三个子页路径
@@ -51,9 +50,8 @@ src/
     ui/core.tsx, ui/llm-ui.tsx  面板、徽标、Sparkline、限流条、Key 条等共享组件
   rag/                    RAG 页：assets.ts / retrieve.ts（分词、BM25、dense、RRF、评测口径）/ AskPanel / EvalPanel
   yyhelp/                 YYHelp 页：engine.ts（规则路由、5 工具、幂等、ReAct 终止）/ assets.ts / ChatPanel / IntentPanel / KbPanel
-  eap/                    EAP 页：assets.ts / ToolsPanel（契约门禁）/ StatsPanel（与 golden 对比）/ WordingPanel（措辞检查器）/ AuditPanel（证据链）
-public/tech/              程序化生成的科技配图（本地渲染，无外部图床依赖）
-public/data/{rag,yyhelp,eap}/  三个子页的离线资产（真语料子集、量化向量、契约与台账导出）
+public/tech/              AI / Agent 题材的程序化配图（code/make_ai_art.py 生成，本地渲染，无外部图床依赖）
+public/data/{rag,yyhelp}/  两个子页的离线资产（真语料子集、量化向量、工具信封与对话回放）
 .github/workflows/deploy.yml  GitHub Pages 自动部署（BASE_PATH=/exp-wall/）
 site/                    自有域名 agent-lyy.top 的发布配置：wrangler.toml（静态资源 Worker）+ deploy.mjs（一键构建并部署）
 proxy/                   站内代理 Worker（llm.agent-lyy.top）：CORS 白名单、限流、额度记账、SSE 透传
@@ -63,7 +61,7 @@ proxy/                   站内代理 Worker（llm.agent-lyy.top）：CORS 白�
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173（子页：/rag/ /yyhelp/ /eap/）
+npm run dev      # http://localhost:5173（子页：/rag/ /yyhelp/）
 npm run build    # 输出到 dist/
 npm run preview  # 本地预览构建产物
 ```

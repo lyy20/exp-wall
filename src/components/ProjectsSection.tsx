@@ -3,12 +3,11 @@ import { motion, useScroll, useTransform, type MotionValue } from 'framer-motion
 import FadeIn from './FadeIn';
 import { page } from '../shared/asset';
 
-// 卡片 01-03 都做了可交互的独立页（同一仓库、同一域名）；04 只有公开仓库。
+// 卡片 01-02 都做了可交互的独立页（同一仓库、同一域名）；03 只有公开仓库。
 const DEMO: Record<string, { href: string; label: string; external?: boolean }> = {
-  '01': { href: page('eap'), label: '进入交互 Demo' },
-  '02': { href: page('yyhelp'), label: '进入交互 Demo' },
-  '03': { href: page('rag'), label: '进入交互 Demo' },
-  '04': { href: 'https://github.com/lyy20/RLforUSV_CTRIP', label: '查看公开仓库', external: true },
+  '01': { href: page('yyhelp'), label: '进入交互 Demo' },
+  '02': { href: page('rag'), label: '进入交互 Demo' },
+  '03': { href: 'https://github.com/lyy20/RLforUSV_CTRIP', label: '查看公开仓库', external: true },
 };
 
 interface StackGroup {
@@ -39,42 +38,6 @@ interface Project {
 const PROJECTS: Project[] = [
   {
     id: '01',
-    name: '科研实验分析助手 Agent',
-    tagline:
-      '把实验数据目录变成可溯源、可拒答、可审计的对比结论——平台不许 LLM 参与数值计算，也不许它判定自己输出的正确性。',
-    role: '独立设计与交付 · 2026.08 — 至今',
-    stack: [
-      { label: 'Agent 与契约', items: ['Python 3.12', 'YAML 声明式契约', 'typing.Protocol', 'argparse 多入口'] },
-      { label: '数据与统计', items: ['pandas', 'numpy', 'scipy', 'SQLite'] },
-      { label: '验证与呈现', items: ['pytest 547 项', '变异测试', 'Streamlit', 'Altair'] },
-    ],
-    points: [
-      {
-        tag: '工具契约',
-        text: '为 8 个外部能力定义四段式契约（做什么 / 何时用 / 何时不用 / 失败时怎么办），只读与幂等显式声明，参数 enum 收敛减少模型猜测空间，返回值附来源句柄（run_id / 指标名 / n）。',
-      },
-      {
-        tag: '失败语义',
-        text: '9 类错误码严格区分「没有数据」与「数据没取到」——把系统故障表述成「实验没有结果」，是这一场景里最严重的事故。',
-      },
-      {
-        tag: '容错与降级',
-        text: '重试矩阵（仅作用于幂等只读调用）、熔断（60 s 内失败 ≥5 次 → OPEN 30 s）、deadline 预算向下传播、L0–L5 降级阶梯逐级留痕，全部用假时钟做确定性测试。',
-      },
-      {
-        tag: '评测门禁',
-        text: '547 项测试 + 25 个入口全链路验收：每个入口声明期望退出码与输出证据，按设计拒答计通过、崩溃计失败，期望码被冻结后与实现不一致即中止。',
-      },
-    ],
-    metrics: [
-      { value: '547 项', label: '测试全绿' },
-      { value: '25 / 25', label: '入口验收通过' },
-      { value: '0.222 MB', label: '146.5 GB 数据根实际读取' },
-      { value: '9 类', label: '错误码区分失败语义' },
-    ],
-  },
-  {
-    id: '02',
     name: 'YYHelp 电商智能客服平台',
     tagline: '多轮对话 Agent：前作解决的是检索准不准，本项目解决的是多轮对话能不能可靠地把事办完。',
     role: '独立开发 · 2026.09 — 至今',
@@ -109,7 +72,7 @@ const PROJECTS: Project[] = [
     ],
   },
   {
-    id: '03',
+    id: '02',
     name: '科研文献 RAG 问答平台',
     tagline: '把 PDF 文献库变成答案带可核对引用的问答链路，重点在评测与消融，而不是再接一个模型。',
     role: '独立开发 · 2026.08 — 至今',
@@ -143,7 +106,7 @@ const PROJECTS: Project[] = [
     ],
   },
   {
-    id: '04',
+    id: '03',
     name: 'CTRIP · 无人水面艇目标跟踪',
     tagline: '把「部分可观测下的状态估计」与「执行不完美下的可靠性设计」做成一篇第一作者论文。',
     role: '第一作者 · 2024.12 — 至今 · 投稿 Science China Information Sciences（中科院一区，审稿中）',
@@ -312,7 +275,7 @@ export default function ProjectsSection() {
         </FadeIn>
         <FadeIn delay={0.1}>
           <p className="mx-auto mt-5 max-w-[560px] text-xs leading-relaxed text-[#D7E2EA]/70 md:text-sm">
-            三段独立交付的工程项目，加一段第一作者科研经历。下面每张卡片都能对上简历里的每一句。
+            两段独立交付的工程项目，加一段第一作者科研经历。下面每张卡片都能对上简历里的每一句。
           </p>
         </FadeIn>
       </div>

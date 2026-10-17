@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import { chatStream, describeError } from '../shared/llm/client';
 import { playText } from '../shared/replay';
 import { Badge, Chip, CodeBlock, KeyValue, Panel, StatTile } from '../shared/ui/core';
-import { ModeBadge, QuotaBar } from '../shared/ui/llm-ui';
+import { ModeBadge } from '../shared/ui/llm-ui';
 import type { LlmMode } from '../shared/llm/mode';
 import type { YyAssets, YyConv, YyTurn } from './assets';
 import { decide, ToolRuntime, toObservation, type ToolEnvelope } from './engine';
@@ -46,6 +46,7 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
   const [run, setRun] = useState(false);
   const [term, setTerm] = useState<string>('');
   const [err, setErr] = useState<{ title: string; detail: string } | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const abort = useRef<AbortController | null>(null);
 
   const conv: YyConv | undefined = convs[ci];
@@ -136,21 +137,26 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
   return (
     <>
       <Panel
-        title="对话台：17 组真实对话回放"
-        subtitle="这些对话来自项目真实产物：状态链取自 demo_ckpt.db 的 checkpoint 记录，工具轮的 args/result 是用项目 venv 真实调用 5 个 @tool 的落盘信封，assistant 文本取自项目 output 里真实模型回答。存在缺口的地方我照实标注，不补编。"
+        title={'对话台：' + convs.length + ' 组真实对话回放'}
+        subtitle="状态链、工具入参与返回、模型回答都取自项目真实产物；哪些是拼接、哪些缺失，对话里直接标注。"
         right={<ModeBadge mode={llm.mode} liveLabel="可切实时 ReAct" replayLabel="录制回放" />}
       >
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {convs.map((c, i) => (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {convs.slice(0, showAll ? convs.length : 6).map((c, i) => (
             <Chip key={c.id} active={i === ci} onClick={() => void play(i)}>{c.id}</Chip>
           ))}
+          {convs.length > 6 && (
+            <button type="button" className="dp-btn" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => setShowAll(!showAll)}>
+              {showAll ? '收起' : '全部 ' + convs.length + ' 组'}
+            </button>
+          )}
         </div>
         {conv && (
           <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: 'var(--fg)' }}>{conv.title}</span>
             {conv.intent && <Badge tone="accent">{conv.intent}</Badge>}
             {conv.exit && <Badge tone="live">{conv.exit}</Badge>}
-            <span className="dp-mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)' }}>{conv.turns.length} 轮 · 来源 {conv.source ?? '—'}</span>
+            <span className="dp-mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)' }}>{conv.turns.length} 轮</span>
           </div>
         )}
         {conv?.note && <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.6 }}>注：{conv.note}</p>}
@@ -165,7 +171,12 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
                 {t.seq !== undefined && <span className="dp-mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>seq {t.seq}</span>}
               </div>
               {t.text && <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.75, color: 'var(--fg)', whiteSpace: 'pre-wrap' }}>{t.text}</p>}
-              {t.result && <pre className="dp-scroll" style={{ margin: 0, maxHeight: 210, overflow: 'auto', fontSize: 10.5, lineHeight: 1.55, color: 'var(--fg-dim)' }}>{jsonPretty(t.result)}</pre>}
+              {t.result && (
+                <details style={{ marginTop: 4 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 10.5, color: 'var(--fg-faint)' }}>工具返回（JSON，点开核对）</summary>
+                  <pre className="dp-scroll" style={{ margin: '6px 0 0', maxHeight: 210, overflow: 'auto', fontSize: 10.5, lineHeight: 1.55, color: 'var(--fg-dim)' }}>{jsonPretty(t.result)}</pre>
+                </details>
+              )}
               {t.note && <p style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--warn)' }}>{t.note}</p>}
             </div>
           ))}
@@ -174,8 +185,8 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
       </Panel>
 
       <Panel
-        title="实时 ReAct：有 key 时真跑循环（工具真执行）"
-        subtitle="这不是把回放换皮：工具调用走浏览器里那套真实实现（同一套参数校验、同一份 fixture 数据、同一份幂等表），终止条件也按项目的 max_steps / max_wall_s / 重复调用次数真判。"
+        title="现场跑一轮：任意新问题（工具真执行）"
+        subtitle="不是把回放换皮：工具调用走浏览器里那套真实实现（同一份 fixture、同一份幂等表），终止条件也真判。"
         right={<ModeBadge mode={llm.mode} liveLabel="可实时运行" replayLabel="需要 key" />}
       >
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -183,8 +194,7 @@ export function ChatPanel({ assets, llm }: { assets: YyAssets; llm: { live: bool
           <button type="button" className="dp-btn dp-btn-primary" onClick={() => void liveRun(q)} disabled={!llm.live || run}>{run ? '循环运行中…' : '真跑一轮'}</button>
           {run && <button type="button" className="dp-btn" onClick={() => abort.current?.abort()}>中止</button>}
         </div>
-        {!llm.live && <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--fg-faint)' }}>零配置下左边可以完整跑回放；想让它现场处理任意新问题，需要模型通道：站内代理可用就直接跑，否则在页面上方填你自己的 key（只存 localStorage）。</p>}
-        <div style={{ marginTop: 10 }}><QuotaBar mode={llm.mode} /></div>
+        {!llm.live && <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--fg-faint)' }}>回放不需要 key；要现场处理任意新问题，需要一个模型通道（页面上方可选填自己的 key）。</p>}
         {err && <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--err)' }}>{err.title}：{err.detail}</p>}
         {term && <p style={{ margin: '10px 0 0', fontSize: 12, color: term === 'answered' ? 'var(--live)' : 'var(--warn)' }}>agent_termination = <b className="dp-mono">{term}</b></p>}
 

@@ -149,6 +149,7 @@ const HELPERS = [
   "  countBadge: function (t) { return this.badges().filter(function (x) { return x === t; }).length; },",
   "  lines: function () { return document.body.innerText.split(String.fromCharCode(10)); },",
   "  bar: function () { var t = this.lines(); for (var i = 0; i < t.length; i += 1) { var k = t[i].indexOf('站内额度：'); if (k >= 0) return t[i].slice(k); } return ''; },",
+  "  openDetails: function () { var n = 0; var ds = document.querySelectorAll('details'); for (var i = 0; i < ds.length; i += 1) { if (!ds[i].open) { var s = ds[i].querySelector('summary'); if (s) { s.click(); n += 1; } } } return n; },",
   "  bodyText: function () { return document.body.innerText; },",
   "  qInput: function () { var all = document.querySelectorAll('input.dp-input'); for (var i = 0; i < all.length; i += 1) { if ((all[i].placeholder || '').indexOf('问点关于') === 0) return all[i]; } return null; },",
   "  askBtn: function () { var all = document.querySelectorAll('button'); for (var i = 0; i < all.length; i += 1) { if (all[i].textContent.trim() === '提问') return all[i]; } return null; },",
@@ -286,6 +287,10 @@ async function main() {
     await cdp.eval(HELPERS);
     await waitFor(cdp, "!!__acc.qInput()", "提问输入框出现", 40000);
     await sleep(1200);
+    // 新版页把「用自己的 key / 站内额度」收进了 <details>：先展开，后面的额度断言才读得到真实文本
+    // （页面默认只保留问答与结果，这是刻意的降噪，不是把额度藏起来）。
+    await cdp.eval("window.__acc && __acc.openDetails ? __acc.openDetails() : 0");
+    await sleep(400);
 
     // 对齐分钟桶之后再点第一次：整套「连问 4 次」必须落在同一个桶里（原因见 alignMinuteStart 注释）
     await alignMinuteStart(48000);
@@ -355,7 +360,7 @@ async function main() {
     const bucketAtEnd = Math.floor(Date.now() / 60000);
     check("整轮点击没有跨分钟桶（跨桶会让第 4 次被误放行，属测试假失败，重跑即可）", bucketAtEnd === bucketAtStart, "bucket " + bucketAtStart + " -> " + bucketAtEnd);
 
-    console.log("== G. 另外两个 demo 页的徽标必须同样明写「站内代理」（不能各页各说各话）");
+    console.log("== G. 另一个 demo 页（/yyhelp/）的徽标必须同样明写「站内代理」（不能各页各说各话）");
     const origin = new URL(ACCEPT_URL).origin;
     const proxyQ = new URL(ACCEPT_URL).searchParams.get("proxy");
     // 子页路径必须从 ACCEPT_URL 反推：本地 dev 是根路径（/rag/ → /yyhelp/），
@@ -368,7 +373,6 @@ async function main() {
     const basePath = "/" + (segs.length ? segs.join("/") + "/" : "");
     const pages = [
       ["YYHelp 电商客服", basePath + "yyhelp/"],
-      ["EAP 实验分析", basePath + "eap/"],
     ];
     for (const [name, path] of pages) {
       const url = origin + path + (proxyQ ? "?proxy=" + encodeURIComponent(proxyQ) : "");

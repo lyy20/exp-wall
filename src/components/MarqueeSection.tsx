@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
-// 科技题材配图：由 code/make_tech_art.py 程序化生成（深色底 + 蓝青主色 + 少量紫色点缀，
+// AI / Agent 题材配图：由 code/make_ai_art.py 程序化生成（智能体星座、神经格栅、多智能体蜂群、
+// token 流、推理树、嵌入空间点云、电路、注意力波形、同心环；深色底 + 蓝青主色 + 少量品红点缀，
 // 全部本地渲染，无外部图床依赖）。想换成自己的成果图时，只替换这个数组即可。
 // 路径统一加 import.meta.env.BASE_URL 前缀：部署到 GitHub Pages 子路径（/exp-wall/）时不会 404。
 const TILE_NAMES: string[] = [

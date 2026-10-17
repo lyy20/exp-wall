@@ -1,7 +1,7 @@
 // P1 评测面板：在浏览器里跑完 20 题，真算 Recall@5 / MRR，并与 Python 侧同口径数字并列。
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeError, embedTexts, normalize } from '../shared/llm/client';
-import { Badge, Panel, StatTile } from '../shared/ui/core';
+import { Panel, StatTile } from '../shared/ui/core';
 import { ModeBadge } from '../shared/ui/llm-ui';
 import type { LlmMode } from '../shared/llm/mode';
 import { f32FromBase64, type RagAssets } from './assets';
@@ -78,6 +78,13 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
     }
   }, [assets, llm.live, running]);
 
+  const auto = useRef(false);
+  useEffect(() => {
+    if (auto.current) return;
+    auto.current = true;
+    void run();
+  }, [run]);
+
   const base = assets.evalFile._python_baseline;
   const recall = rows ? rows.reduce((s, r) => s + r.recall5, 0) / rows.length : 0;
   const mrr = rows ? rows.reduce((s, r) => s + r.rr, 0) / rows.length : 0;
@@ -88,20 +95,18 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
 
   return (
     <Panel
-      title="评测：20 题 Recall@5 / MRR（浏览器内真算）"
-      subtitle="与项目 Python 侧完全同口径：dense(int8 去量化 top20) + BM25(过滤倒排 top20) → RRF(k=60) 融合取 top5；不跑 rerank。gold 全部落在本页 800 条子集内，因此数字可直接对齐。"
+      title="评测：20 题 Recall@5 / MRR"
+      subtitle="和项目 Python 侧同一套检索口径（不含精排），所以两边的数字可以直接对照。"
       right={<ModeBadge mode={llm.mode} />}
     >
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button type="button" className="dp-btn dp-btn-primary" onClick={() => void run()} disabled={running}>
-          {running ? '评测中 ' + progress + '/' + total : '在浏览器里跑 20 题'}
-        </button>
-        <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-          Python 侧参考：Recall@5 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{String(base['recall@5'])}</b> ·
-          MRR <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{String(base.mrr)}</b>
-          {fullRef && fullRef['recall@5'] !== undefined ? '（同算子跑全量 5325 的对照：Recall@5 ' + String(fullRef['recall@5']) + ' · MRR ' + String(fullRef.mrr) + '，说明 800 子集没把题目变易或变难）' : ''}
-        </span>
-      </div>
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.7 }}>
+        {rows
+          ? '20 题已在你浏览器里跑完（全量 ' + (totalMs >= 1000 ? (totalMs / 1000).toFixed(2) + ' s' : totalMs.toFixed(0) + ' ms') + '），下面是浏览器算出的数字与 Python 侧并列。'
+          : running
+            ? '评测中 ' + progress + '/' + total + ' …'
+            : '正在准备评测…'}
+        {fullRef && fullRef['recall@5'] !== undefined ? ' 同算子跑全量 5325 的对照：Recall@5 ' + String(fullRef['recall@5']) + ' · MRR ' + String(fullRef.mrr) + '。' : ''}
+      </p>
 
       {embedNote && <p style={{ margin: '10px 0 0', fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.6 }}>{embedNote}</p>}
       {err && (
@@ -113,14 +118,15 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
 
       {rows && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 12 }}>
-            <StatTile label="浏览器 Recall@5" value={(recall * 100).toFixed(1) + '%'} sub={'Python ' + (Number(base['recall@5']) * 100).toFixed(1) + '%'} tone={Math.abs(recall - Number(base['recall@5'])) < 1e-9 ? 'live' : 'warn'} />
-            <StatTile label="浏览器 MRR" value={mrr.toFixed(4)} sub={'Python ' + String(base.mrr)} tone={Math.abs(mrr - Number(base.mrr)) < 1e-4 ? 'live' : 'warn'} />
-            <StatTile label="与 Python 逐题一致" value={(total - rankDiff) + '/' + total} sub={rankDiff ? rankDiff + ' 题 rank 不同（多数是同分次序差异）' : '全部题 rank 完全一致'} tone={rankDiff ? 'warn' : 'live'} />
-            <StatTile label="20 题总耗时" value={totalMs >= 1000 ? (totalMs / 1000).toFixed(2) + ' s' : totalMs.toFixed(0) + ' ms'} sub={'平均 ' + (rows.reduce((s, r) => s + r.ms, 0) / rows.length).toFixed(1) + ' ms / 题（含 dense 800×1024 内积）'} tone="accent" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginTop: 12 }}>
+            <StatTile label="Recall@5" value={(recall * 100).toFixed(1) + '%'} sub={'Python ' + (Number(base['recall@5']) * 100).toFixed(1) + '%'} tone={Math.abs(recall - Number(base['recall@5'])) < 1e-9 ? 'live' : 'warn'} />
+            <StatTile label="MRR" value={mrr.toFixed(4)} sub={'Python ' + String(base.mrr)} tone={Math.abs(mrr - Number(base.mrr)) < 1e-4 ? 'live' : 'warn'} />
+            <StatTile label="与 Python 逐题一致" value={(total - rankDiff) + '/' + total} sub={rankDiff ? rankDiff + ' 题 rank 不同（多为同分次序）' : '全部题 rank 完全一致'} tone={rankDiff ? 'warn' : 'live'} />
           </div>
 
-          <div style={{ marginTop: 12, overflowX: 'auto' }} className="dp-scroll">
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--fg-dim)' }}>逐题对照表（20 行）</summary>
+          <div style={{ marginTop: 10, overflowX: 'auto' }} className="dp-scroll">
             <table className="dp-mono" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
               <thead>
                 <tr style={{ color: 'var(--fg-faint)', textAlign: 'left' }}>
@@ -148,9 +154,7 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
               </tbody>
             </table>
           </div>
-          <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.6 }}>
-            <Badge tone="live">口径说明</Badge> {String(base.note ?? '')}
-          </p>
+          </details>
         </>
       )}
     </Panel>
