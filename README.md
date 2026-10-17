@@ -50,7 +50,8 @@ src/
     ui/core.tsx, ui/llm-ui.tsx  面板、徽标、Sparkline、限流条、Key 条等共享组件
   rag/                    RAG 页：assets.ts / retrieve.ts（分词、BM25、dense、RRF、评测口径）/ AskPanel / EvalPanel
   yyhelp/                 YYHelp 页：engine.ts（规则路由、5 工具、幂等、ReAct 终止）/ assets.ts / ChatPanel / IntentPanel / KbPanel
-public/tech/              AI / Agent 题材的程序化配图（code/make_ai_art.py 生成，本地渲染，无外部图床依赖）
+public/tech/              AI / Agent 题材的程序化配图（scripts/make_ai_art.py 生成，本地渲染，无外部图床依赖）
+scripts/make_ai_art.py    配图生成器：智能体星座 / 神经格栅 / 蜂群 / token 流 / 推理树 / 嵌入点云 / 电路 / 波形 / 同心环
 public/data/{rag,yyhelp}/  两个子页的离线资产（真语料子集、量化向量、工具信封与对话回放）
 .github/workflows/deploy.yml  GitHub Pages 自动部署（BASE_PATH=/exp-wall/）
 site/                    自有域名 agent-lyy.top 的发布配置：wrangler.toml（静态资源 Worker）+ deploy.mjs（一键构建并部署）
