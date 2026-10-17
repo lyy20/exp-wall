@@ -79,6 +79,24 @@ export function useLlm(initialProvider?: string): LlmController {
     };
   }, [proxyTick]);
 
+  // 额度是会变的服务端状态（分钟桶、每日上限）。页面开着的时候它也会变，
+  // 所以每 15s 主动探一次并 bump epoch：徽标、额度条、「额度用完」警示读到的都是当前值。
+  useEffect(() => {
+    if (!proxyConfigured()) return undefined;
+    let alive = true;
+    const id = window.setInterval(() => {
+      void probeProxy(true).then((st) => {
+        if (!alive) return;
+        setProxyEpoch((e) => e + 1);
+        setProxyDetail(st ? null : proxyFailureDetail());
+      });
+    }, 15000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
   const setProviderId = useCallback((id: string) => {
     setProviderIdState(id);
     savePreferred(id);
