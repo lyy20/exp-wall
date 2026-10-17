@@ -303,7 +303,13 @@ async function main() {
     const colors = JSON.parse(await cdp.eval("JSON.stringify(__acc.badgeColors())"));
     check("页面上有「站内代理」徽标", colors.some((b) => b[0] === "站内代理"), JSON.stringify(colors));
     check("徽标用的是 accent 色（不是回放色）", colors.some((b) => b[0] === "站内代理" && b[1] === "var(--accent)"), JSON.stringify(colors));
-    const barBefore = await cdp.eval("__acc.bar()");
+    // 额度条靠 1.5s ticker 刷新：刚跨过分钟桶时它还显示上一桶的 2/3，直接断言会假失败。
+    // 先等它自己刷到满格再读（这本身也在验证「页面上的额度是活的」）。
+    let barBefore = "";
+    try {
+      await waitFor(cdp, "__acc.bar().indexOf(\"站内额度：本分钟剩 3/3\") >= 0", "额度条刷新到满格 3/3", 22000, 250);
+      barBefore = await cdp.eval("__acc.bar()");
+    } catch (err) { barBefore = await cdp.eval("__acc.bar()"); }
     check("详情栏写明站内额度 3 次/分钟", barBefore.indexOf("站内额度：本分钟剩 3/3") >= 0, barBefore);
 
     console.log("== B/C/D. 真点一次「提问」");
@@ -343,7 +349,14 @@ async function main() {
     check("第 3 次提问正常出答案", okAnswer(r3.text), r3.text.slice(0, 80));
     const st3 = await statusJson();
     check("服务端计数：3 次（额度刚好用完）", st3.counters.minute === 3 && st3.remaining.minute === 0, JSON.stringify(st3.counters));
-    const warn = await cdp.eval("__acc.bodyText()");
+    // 额度警示在「用自己的 key / 额度」折叠区里（页面默认只留问答与结果）。先展开，再等它随额度归零刷新出来：
+    // 页面上的数字靠 15s 一次的后台探测保持新鲜，刚用完的那几秒可能还没翻牌。
+    await cdp.eval("window.__acc && __acc.openDetails ? __acc.openDetails() : 0");
+    let warn = "";
+    try {
+      await waitFor(cdp, "__acc.bodyText().indexOf(\"站内额度已用完\") >= 0", "额度警示出现", 20000, 250);
+      warn = await cdp.eval("__acc.bodyText()");
+    } catch (err) { warn = await cdp.eval("__acc.bodyText()"); }
     check("界面上出现「站内额度已用完」警示（额度耗尽必须写在页面上）", warn.indexOf("站内额度已用完") >= 0, warn.slice(0, 200));
     check("警示写明「下一次提问会被服务端明确拒绝（429）」", warn.indexOf("下一次提问会被服务端明确拒绝（429）") >= 0, warn.slice(0, 200));
 

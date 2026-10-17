@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { limiter } from '../llm/limiter';
 import { MODE_TITLE, type LlmMode } from '../llm/mode';
-import { proxyBase, proxyStatus } from '../llm/proxy';
+import { probeProxy, proxyBase, proxyStatus } from '../llm/proxy';
 import { PROVIDERS } from '../llm/providers';
 import { maskKey } from '../llm/keys';
 import type { LlmController } from '../llm/useLlm';
@@ -60,6 +60,13 @@ export function QuotaBar({ mode }: { mode?: LlmMode }) {
   const snap = limiter.snapshot();
   const proxy = proxyStatus();
   useTicker();
+  // 只靠 ticker 重渲染读到的是模块级缓存（15s/30s TTL）：跨分钟桶时页面会停在上一桶的旧值。
+  // 这里每 15s 主动探一次 /status，让「站内额度」始终是活的数字。
+  useEffect(() => {
+    if (mode !== 'proxy') return undefined;
+    const id = window.setInterval(() => { void probeProxy(true); }, 15000);
+    return () => window.clearInterval(id);
+  }, [mode]);
   return (
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 11, color: 'var(--fg-faint)' }}>
       <span>
