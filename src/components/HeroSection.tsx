@@ -26,7 +26,7 @@ export default function HeroSection() {
       <FadeIn delay={0}>
         <nav className="flex items-center justify-between px-6 py-6 md:px-12 md:py-8">
           <span className="text-xs font-bold uppercase tracking-[0.2em] text-[#D7E2EA] md:text-sm">
-            罗毅扬 · LUO YIYANG
+            罗毅扬<span className="hidden sm:inline"> · LUO YIYANG</span>
           </span>
           <div className="flex items-center gap-6 md:gap-10">
             <a href="#about" className="text-xs uppercase tracking-wider text-[#D7E2EA] transition-opacity duration-200 hover:opacity-70 md:text-sm">About</a>

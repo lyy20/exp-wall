@@ -6,6 +6,13 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // 统一到 apex：www 只是别名，301 过去，避免同一份内容挂在两个 URL 上（分享出去的链接也不会分叉）。
+    if (url.hostname === "www.agent-lyy.top") {
+      url.hostname = "agent-lyy.top";
+      return Response.redirect(url.toString(), 301);
+    }
+
     if (!url.pathname.startsWith("/api/llm/")) return env.ASSETS.fetch(request);
 
     // service binding：直接打到 expwall-llm 这个 Worker，不经过公网、不需要 CORS

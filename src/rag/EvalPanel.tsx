@@ -37,7 +37,7 @@ export function EvalPanel({ assets, llm }: { assets: RagAssets; llm: { live: boo
 
       if (missing === 0) {
         for (let i = 0; i < qs.length; i++) vectors[i] = normalize(f32FromBase64(pre.get(qs[i].q) as string));
-        setEmbedNote('查询向量来自 public/data/rag/query_vectors.json（与建库同一 bge-m3 权重离线预计算，float32，不再量化）');
+        setEmbedNote('');
       } else if (llm.live) {
         setEmbedNote('资产里缺少部分预计算向量，正在用你的 key 真调 embedding 一次性算 ' + qs.length + ' 条查询向量…');
         const emb = await embedTexts(qs.map((q) => q.q));

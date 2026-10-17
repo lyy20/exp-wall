@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>页面不存在 ｜ 罗毅扬</title>
+    <meta name="theme-color" content="#0C0C0C" />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+        background: #0C0C0C; color: #D7E2EA;
+        font-family: 'Kanit', 'Microsoft YaHei', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .card { max-width: 520px; text-align: center; }
+      .code {
+        font-size: clamp(4rem, 18vw, 7rem); font-weight: 900; line-height: 1; margin: 0 0 12px;
+        background: linear-gradient(180deg, #E7EEF5 0%, #8FA3B5 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      h1 { font-size: 18px; font-weight: 700; margin: 0 0 8px; letter-spacing: 0.02em; }
+      p { margin: 0; font-size: 13px; line-height: 1.8; color: rgba(215, 226, 234, 0.62); }
+      .links { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+      a {
+        display: inline-block; padding: 8px 14px; border-radius: 999px; text-decoration: none;
+        font-size: 12px; color: #D7E2EA; border: 1px solid rgba(215, 226, 234, 0.35);
+        transition: background 0.2s ease, border-color 0.2s ease;
+      }
+      a:hover { background: rgba(215, 226, 234, 0.1); border-color: #D7E2EA; }
+      .primary { background: rgba(215, 226, 234, 0.12); border-color: rgba(215, 226, 234, 0.55); }
+      .hint { margin-top: 18px; font-size: 11px; color: rgba(215, 226, 234, 0.38); }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <p class="code">404</p>
+      <h1>这个页面不在了</h1>
+      <p>可能是链接旧了，或者这一页已经合并进项目主页。下面这些入口都还在。</p>
+      <div class="links">
+        <a class="primary" id="home" href="/">返回作品集</a>
+        <a id="rag" href="/rag/">RAG 问答</a>
+        <a id="yy" href="/yyhelp/">YYHelp 客服</a>
+      </div>
+      <p class="hint">6 秒后自动回到作品集首页</p>
+    </div>
+    <script>
+      // 同一份 404 同时服务自有域名（根路径）与 GitHub Pages（/exp-wall/ 子路径）：
+      // 前缀从当前 URL 反推，链接与跳转都跟着走，避免 404 页自己再 404。
+      (function () {
+        var m = location.pathname.match(/^(\/[^/]+\/)?/);
+        var base = m && m[1] && m[1].indexOf('/exp-wall/') === 0 ? m[1] : '/';
+        document.getElementById('home').setAttribute('href', base);
+        document.getElementById('rag').setAttribute('href', base + 'rag/');
+        document.getElementById('yy').setAttribute('href', base + 'yyhelp/');
+        setTimeout(function () { location.replace(base); }, 6000);
+      })();
+    </script>
+  </body>
+</html>
