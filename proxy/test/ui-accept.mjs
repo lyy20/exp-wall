@@ -393,6 +393,9 @@ async function main() {
       await cdp.send("Page.navigate", { url });
       await waitFor(cdp, "document.readyState === \"complete\"", name + " 页面加载完成", 40000);
       await cdp.eval(HELPERS);
+      // 新版 /yyhelp/ 先到登录页（商城 + 右侧助手在登录之后）：点一下演示账号，再到页面上找徽标。
+      await cdp.eval("(function(){ var b=[...document.querySelectorAll('button')].find(function(x){ return x.textContent.trim().indexOf('一键登录') === 0; }); if (b) b.click(); return 'ok'; })()");
+      try { await waitFor(cdp, "document.body.innerText.indexOf('AI 客服助手') >= 0", name + " 登录后进入交互页", 25000, 300); } catch { /* 下面按徽标断言给出结论 */ }
       let badges = [];
       try {
         await waitFor(cdp, "__acc.countBadge('站内代理') >= 1", name + " 出现站内代理徽标", 20000, 300);

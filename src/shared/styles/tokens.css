@@ -212,3 +212,16 @@ select.dp-input {
 @media (max-width: 720px) {
   .dp-wrap { padding: 0 14px; }
 }
+
+/* YYHelp：商城（左）+ AI 助手（右侧栏）。窄屏时自然堆叠，宽屏时助手固定在右侧。 */
+.yy-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+@media (min-width: 1040px) {
+  .yy-layout {
+    grid-template-columns: minmax(0, 1fr) 400px;
+  }
+}

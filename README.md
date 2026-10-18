@@ -3,13 +3,12 @@
 在线预览 👉 **https://lyy20.github.io/exp-wall/**
 
 一个深色主题的单页作品集（全屏 Hero、横向滚动图带、逐字渐显的自我介绍、Framer Motion 粘性堆叠项目卡，底衬 Three.js 粒子星空 + 布料式鼠标斥力 + 点击彩色墨水），
-并在这一个域名、一个仓库里额外交付了 **2 个可交互的项目 Demo 页 + 1 个配套演示商城**：把真实项目里「不需要后端也能真跑」的部分搬进浏览器。
+并在这一个域名、一个仓库里额外交付了 **2 个可交互的项目 Demo 页**：把真实项目里「不需要后端也能真跑」的部分搬进浏览器。
 
 | 入口 | 地址 | 这页能做什么 |
 | --- | --- | --- |
 | 作品集首页 | https://lyy20.github.io/exp-wall/ | 主视觉 + 3 张项目卡 + 2 块迷你面板（滚到就自动真跑，不用点按钮） |
-| YYHelp 电商智能客服 | https://lyy20.github.io/exp-wall/yyhelp/ | 多轮对话回放 + 现场跑一轮：规则路由、5 个工具的参数校验与统一信封、写操作确认、幂等重放；没有模型通道时退回「规则直出」，工具仍真执行 |
-| YY 商城（配套演示） | https://lyy20.github.io/exp-wall/shop/ | 演示账号一键登录 → 加购 → 填收货信息下单 → 申请退款 / 修改地址；订单写进 localStorage，客服助手读同一份数据，页面直接给出「订单 2001 到哪了？」这类模板问题 |
+| YYHelp 交互演示（商城 + AI 助手） | https://lyy20.github.io/exp-wall/yyhelp/ | 登录单独一屏（演示账号一键登录）→ 左侧商城：加购、填收货信息下单、申请退款 / 修改地址；右侧 AI 助手读同一份订单，给出「订单 2001 到哪了？」这类模板问题，打开「显示流程」可看每步工具调用（关闭只看结论）。`/shop/` 会跳到这里 |
 | 科研文献 RAG 问答 | https://lyy20.github.io/exp-wall/rag/ | 问一句 → 真检索 → 真模型作答，答案带可展开的原文引用；20 题 Recall@5 / MRR 在浏览器里重算并与 Python 侧对照 |
 
 两页都把「真跑什么」写在能验证的位置（数字、引用、工具返回），不把演示说成产品。
@@ -50,9 +49,9 @@ src/
     compute/stats.ts      浏览器内确定性统计：mean/std/sem/median/p95/OLS/Welch t/bootstrap CI
     ui/core.tsx, ui/llm-ui.tsx  面板、徽标、Sparkline、限流条、Key 条等共享组件
   rag/                    RAG 页：assets.ts / retrieve.ts（分词、BM25、dense、RRF、评测口径）/ AskPanel / EvalPanel
-  yyhelp/                 YYHelp 页：engine.ts（规则路由、5 工具、幂等、ReAct 终止）/ assets.ts / ChatPanel / IntentPanel / KbPanel
+  yyhelp/                 YYHelp 交互页：App.tsx（登录门 → 商城 + 右侧助手）/ ShopPanel.tsx（商品、购物车、结算、订单）/ AssistantSidebar.tsx（对话 + 流程开关）/ shopCatalog.ts / engine.ts（规则路由、5 工具、幂等）/ assets.ts
     storeOrders.ts        商城订单（localStorage）与 fixture 合并：助手和商城读同一份数据
-  shop/                   配套演示商城：App.tsx（登录 / 商品 / 购物车 / 结算 / 订单 + 退款、改地址）/ catalog.ts
+public/shop/index.html   旧链接兼容：/shop/ 自动跳到 /yyhelp/
 public/tech/              AI / Agent 题材的程序化配图（scripts/make_ai_art.py 生成，本地渲染，无外部图床依赖）
 scripts/make_ai_art.py    配图生成器：智能体星座 / 神经格栅 / 蜂群 / token 流 / 推理树 / 嵌入点云 / 电路 / 波形 / 同心环
 public/data/{rag,yyhelp}/  两个子页的离线资产（真语料子集、量化向量、工具信封与对话回放）
@@ -65,7 +64,7 @@ proxy/                   站内代理 Worker（llm.agent-lyy.top）：CORS 白�
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173（子页：/rag/ /yyhelp/ /shop/）
+npm run dev      # http://localhost:5173（子页：/rag/ /yyhelp/）
 npm run build    # 输出到 dist/
 npm run preview  # 本地预览构建产物
 ```

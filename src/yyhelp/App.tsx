@@ -1,113 +1,107 @@
-// P2 页壳：对话台放最上面，意图路由 / 知识库 / 工具契约收进折叠区（想看细节的人才会打开）。
+// YYHelp 交互演示：登录（单独一屏）→ 左侧商城 + 右侧 AI 助手。
+// 页面不放任何后端细节（checkpoint / 系统提示词 / 工具契约 / 回放日志都已删掉），流程只在助手开关打开时显示。
 import { useEffect, useState } from 'react';
 import { useLlm } from '../shared/llm/useLlm';
 import { Badge, Footer, PageShell, Panel, SubHeader } from '../shared/ui/core';
-import { KeyBar } from '../shared/ui/llm-ui';
-import { ChatPanel } from './ChatPanel';
-import { IntentPanel } from './IntentPanel';
-import { KbPanel } from './KbPanel';
 import { loadYyAssets, type YyAssets } from './assets';
-import { page } from '../shared/asset';
+import { ShopPanel, type Session } from './ShopPanel';
+import { AssistantSidebar } from './AssistantSidebar';
+import { ACCOUNTS } from './shopCatalog';
+import { SHOP_SESSION_KEY } from './storeOrders';
+
+function loadSession(): Session | null {
+  try { const raw = localStorage.getItem(SHOP_SESSION_KEY); return raw ? (JSON.parse(raw) as Session) : null; } catch { return null; }
+}
+function saveSession(s: Session | null): void {
+  try { if (s) localStorage.setItem(SHOP_SESSION_KEY, JSON.stringify(s)); else localStorage.removeItem(SHOP_SESSION_KEY); } catch { /* ignore */ }
+}
 
 export function App() {
   const llm = useLlm('deepseek');
-  const [a, setA] = useState<YyAssets | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [session, setSession] = useState<Session | null>(() => loadSession());
+  const [assets, setAssets] = useState<YyAssets | null>(null);
+  const [err, setErr] = useState('');
+  const [login, setLogin] = useState({ phone: '13800000001', password: '123456' });
+  const [loginErr, setLoginErr] = useState('');
 
   useEffect(() => {
+    if (!session) { setAssets(null); return; }
     let alive = true;
-    loadYyAssets().then((x) => { if (alive) setA(x); }).catch((e) => { if (alive) setErr(String((e as Error)?.message ?? e)); });
+    loadYyAssets()
+      .then((a) => { if (alive) setAssets(a); })
+      .catch((e) => { if (alive) setErr(String((e as Error)?.message ?? e)); });
     return () => { alive = false; };
-  }, []);
+  }, [session]);
 
-  const turns = a ? a.replay.reduce((s, c) => s + c.turns.length, 0) : 0;
-  const toolTurns = a ? a.replay.reduce((s, c) => s + c.turns.filter((t) => t.role === 'tool').length, 0) : 0;
+  const doLogin = (phone = login.phone, password = login.password) => {
+    const acc = ACCOUNTS.find((a) => a.phone === phone.trim() && a.password === password);
+    if (!acc) { setLoginErr('账号或密码不对（用下面的演示账号）'); return; }
+    const s: Session = { phone: acc.phone, name: acc.name };
+    saveSession(s);
+    setSession(s);
+    setLoginErr('');
+  };
+
+  const logout = () => {
+    saveSession(null);
+    setSession(null);
+    setAssets(null);
+    setErr('');
+  };
+
+  if (!session) {
+    return (
+      <PageShell>
+        <SubHeader kicker="Demo 01 · 应用层" title="YYHelp 交互演示" subtitle="一个能真把事办完的电商客服 Agent：先登录，左侧下单，右侧助手能直接查到。" right={<Badge tone="live">真工具 · 真幂等</Badge>} />
+        <div className="dp-wrap" style={{ paddingBottom: 80 }}>
+          <div style={{ maxWidth: 460, margin: '40px auto 0' }}>
+            <Panel title="登录" subtitle="演示账号，不用注册；密码都是 123456。">
+              <div style={{ display: 'grid', gap: 10 }}>
+                <label style={{ display: 'grid', gap: 4, fontSize: 11.5, color: 'var(--fg-dim)' }}>手机号<input className="dp-input" value={login.phone} onChange={(e) => setLogin({ ...login, phone: e.target.value })} /></label>
+                <label style={{ display: 'grid', gap: 4, fontSize: 11.5, color: 'var(--fg-dim)' }}>密码<input className="dp-input" type="password" value={login.password} onChange={(e) => setLogin({ ...login, password: e.target.value })} /></label>
+                {loginErr && <p style={{ margin: 0, fontSize: 11.5, color: 'var(--err)' }}>{loginErr}</p>}
+                <button type="button" className="dp-btn dp-btn-primary" onClick={() => doLogin()}>登录</button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {ACCOUNTS.map((a) => (
+                    <button key={a.phone} type="button" className="dp-btn" style={{ fontSize: 11 }} onClick={() => doLogin(a.phone, a.password)}>
+                      一键登录 {a.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </Panel>
+            <p style={{ margin: '14px 2px 0', fontSize: 11.5, lineHeight: 1.8, color: 'var(--fg-faint)' }}>
+              登录后进入商城：挑几件商品、填收货信息下单，再申请退款或改地址；右侧助手读的是同一份订单数据。
+            </p>
+          </div>
+        </div>
+        <Footer />
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell>
       <SubHeader
         kicker="Demo 01 · 应用层"
-        title="YYHelp 电商智能客服平台"
-        subtitle="一个能真把事办完的客服 Agent：查订单、算运费、建工单、退款。写操作先确认再落库，同一条请求重放会命中幂等键，不重复建单。"
+        title="YYHelp 交互演示"
+        subtitle="左边是商城：下单、改地址、申请退款都会真的改数据；右边的 AI 助手读同一份订单，打开「显示流程」可以看到它每一步调了什么工具。"
         right={<Badge tone="live">真工具 · 真幂等</Badge>}
       />
-
-      <div className="dp-wrap" style={{ paddingBottom: 60, display: 'grid', gap: 16 }}>
+      <div className="dp-wrap" style={{ paddingBottom: 60 }}>
         {err && (
           <Panel title="数据加载失败">
             <p style={{ margin: 0, fontSize: 12, color: 'var(--err)' }}>{err}</p>
           </Panel>
         )}
-        {!a && !err && (
-          <Panel title="正在加载对话与知识库…">
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg-dim)' }}>意图规则、工具信封、订单 fixture 与知识库切片都是项目里的真实产物。</p>
-          </Panel>
-        )}
-
-        {a && (
-          <>
-            <div className="dp-panel-tight" style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: 'var(--fg-dim)' }}>
-              <span>推荐流程：先去商城下一单（或改地址、申请退款）→ 回来问助手，它读到的就是你刚操作过的那张单。</span>
-              <a className="dp-btn" style={{ fontSize: 11, marginLeft: 'auto' }} href={page('shop')}>打开商城 →</a>
-            </div>
-
-            <ChatPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
-            <p style={{ margin: '-4px 2px 0', fontSize: 11, lineHeight: 1.7, color: 'var(--fg-faint)' }}>
-              {a.replay.length} 组真实对话回放（{turns} 轮，其中 {toolTurns} 个工具轮）：状态链、工具入参与结果、assistant 文本分别来自项目里的真实产物，拼接处已标注。
-            </p>
-
-            <details className="dp-panel-tight" style={{ padding: 14 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--fg-dim)' }}>
-                看意图路由、知识库检索与 5 个工具的契约
-              </summary>
-              <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
-                <IntentPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
-                <KbPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
-                <Panel title="5 个工具的契约" subtitle="共用一个信封：参数校验、错误可枚举；只读工具不登记幂等，写操作先确认再落库，成功后只登记一次。">
-                  <div style={{ overflowX: 'auto' }} className="dp-scroll">
-                    <table className="dp-mono" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                      <thead>
-                        <tr style={{ color: 'var(--fg-faint)', textAlign: 'left' }}>
-                          <th style={{ padding: '6px 8px' }}>工具</th>
-                          <th style={{ padding: '6px 8px' }}>副作用</th>
-                          <th style={{ padding: '6px 8px' }}>幂等</th>
-                          <th style={{ padding: '6px 8px' }}>错误类型</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {a.tools.map((t) => (
-                          <tr key={t.name} style={{ borderTop: '1px solid var(--line-soft)', color: 'var(--fg-dim)' }}>
-                            <td style={{ padding: '6px 8px', color: 'var(--fg)' }}>{t.name}</td>
-                            <td style={{ padding: '6px 8px', color: t.side_effect === 'write' ? 'var(--warn)' : 'var(--live)' }}>{t.side_effect}</td>
-                            <td style={{ padding: '6px 8px' }}>{String(t.idempotent)}</td>
-                            <td style={{ padding: '6px 8px', maxWidth: 260 }}>{String(t.error_kinds)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 11.5, lineHeight: 1.8, color: 'var(--fg-dim)' }}>
-                    <li>只读工具不登记幂等：重复读没有副作用，登记反而会让第二次读被误判成重复写</li>
-                    <li>幂等键命中 → 不执行、直接回放首次结果（duplicate=true）</li>
-                    <li>只在成功后登记：否则「第一次 5xx 失败」会被记成已执行，用户永远退不了款</li>
-                    <li>need_confirmation 的结果不登记：否则用户确认后那次真调用会被判成 duplicate 吞掉</li>
-                  </ul>
-                </Panel>
-              </div>
-            </details>
-
-            <details className="dp-panel-tight" style={{ padding: 14 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--fg-dim)' }}>用自己的 API key（可选）</summary>
-              <p style={{ margin: '10px 0 8px', fontSize: 11.5, lineHeight: 1.7, color: 'var(--fg-faint)' }}>
-                不填也能用：意图兜底、实时 ReAct、真语义检索走本站自带的模型通道；规则路由、工具执行与回放完全不需要 key。
-              </p>
-              <KeyBar llm={llm} note="填了 key 只存在你自己浏览器的 localStorage，本站不中转、不记录。" />
-            </details>
-          </>
-        )}
-
-        <Footer />
+        <div className="yy-layout">
+          <ShopPanel session={session} onLogout={logout} />
+          {assets
+            ? <AssistantSidebar assets={assets} llm={{ live: llm.live, mode: llm.mode }} />
+            : <aside className="dp-panel" style={{ padding: 14, fontSize: 12, color: 'var(--fg-faint)' }}>正在加载助手…</aside>}
+        </div>
       </div>
+      <Footer />
     </PageShell>
   );
 }
