@@ -6,7 +6,7 @@ import type { LlmMode } from '../shared/llm/mode';
 import { Badge } from '../shared/ui/core';
 import { decide, ToolRuntime, toObservation, type RouteDecision, type ToolEnvelope } from './engine';
 import type { YyAssets } from './assets';
-import { mergeOrders, readShopOrders, type ShopOrder } from './storeOrders';
+import { mergeOrders, nowIso, readShopOrders, updateShopOrder, type ShopOrder } from './storeOrders';
 
 export interface UserRef { id: string; name: string; phone: string }
 
@@ -25,7 +25,30 @@ const sysPrompt = (userId: string, lastOrder: string) => [
 
 type StepKind = 'gate' | 'think' | 'tool' | 'final' | 'error';
 interface Step { kind: StepKind; text: string; env?: ToolEnvelope; obs?: string }
-interface Turn { id: string; q: string; steps: Step[]; answer: string; mode: 'live' | 'rule'; running: boolean; note?: string }
+interface Undo { kind: 'address' | 'refund'; orderNo: string; prevAddress?: string; prevStatus?: string; prevStatusCn?: string; prevRefund?: string; done?: boolean }
+interface Turn { id: string; q: string; steps: Step[]; answer: string; mode: 'live' | 'rule'; running: boolean; note?: string; undo?: Undo }
+
+const CHAT_KEY = 'expwall.yy.chat.v1';
+interface SavedChat { turns: Turn[]; contextOrder: string; pending: { kind: 'address' | 'refund'; orderNo: string; address?: string; reason?: string } | null; savedAt: number }
+
+function loadChat(phone: string): SavedChat | null {
+  try {
+    const raw = localStorage.getItem(CHAT_KEY + '.' + phone);
+    if (!raw) return null;
+    const j = JSON.parse(raw) as SavedChat;
+    // 只恢复 24 小时内的会话：演示场景下太久的上下文反而会误导（订单可能已经被改过）
+    if (!j || !Array.isArray(j.turns) || Date.now() - (j.savedAt || 0) > 24 * 3600 * 1000) return null;
+    return j;
+  } catch { return null; }
+}
+
+function saveChat(phone: string, data: Omit<SavedChat, 'savedAt'>): void {
+  try { localStorage.setItem(CHAT_KEY + '.' + phone, JSON.stringify({ ...data, savedAt: Date.now() })); } catch { /* ignore */ }
+}
+
+function clearChat(phone: string): void {
+  try { localStorage.removeItem(CHAT_KEY + '.' + phone); } catch { /* ignore */ }
+}
 
 const wrap: React.CSSProperties = { overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'pre-wrap' };
 
@@ -55,6 +78,8 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
   /** 界面上显示的「当前订单」 */
   const [contextOrder, setContextOrder] = useState('');
   const [sheetOpen, setSheetOpen] = useState(false);
+  /** 恢复完成前不要写盘，否则首帧的空 turns 会把已保存的会话覆盖掉 */
+  const restoredRef = useRef(false);
   const maxSteps = Number(assets.config.max_steps ?? 6);
 
   useEffect(() => { try { localStorage.setItem('expwall.yy.showsteps', showSteps ? '1' : '0'); } catch { /* ignore */ } }, [showSteps]);
@@ -64,6 +89,29 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     return () => window.clearInterval(t);
   }, []);
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, [turns]);
+
+  // 刷新/重进页面后恢复会话（按账号隔离；点「新会话」会清掉）
+  useEffect(() => {
+    const saved = loadChat(user.phone);
+    if (!saved) { restoredRef.current = true; return; }
+    setTurns(saved.turns);
+    setContextOrder(saved.contextOrder || '');
+    lastOrderRef.current = saved.contextOrder || '';
+    pendingRef.current = saved.pending || null;
+    const h: { role: 'user' | 'assistant'; content: string }[] = [];
+    for (const t of saved.turns) {
+      if (!t.answer) continue;
+      h.push({ role: 'user', content: t.q });
+      h.push({ role: 'assistant', content: t.answer });
+    }
+    historyRef.current = h.slice(-12);
+    restoredRef.current = true;
+  }, [user.phone]);
+
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    saveChat(user.phone, { turns, contextOrder, pending: pendingRef.current });
+  }, [turns, contextOrder, user.phone]);
 
   const update = useCallback((id: string, patch: Partial<Turn>) => {
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -90,6 +138,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
 
   /** 新会话：清空对话、上下文与待确认动作（账号与商城数据不动）。 */
   const newSession = useCallback(() => {
+    clearChat(user.phone);
     setTurns([]);
     historyRef.current = [];
     lastOrderRef.current = '';
@@ -105,6 +154,27 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     rebuildHistory(kept);
     setInput(turns[idx] ? turns[idx].q : '');
   }, [turns, rebuildHistory]);
+
+  /** 记录写操作前的值，用于「撤销」。 */
+  const prevOf = useCallback((orderNo: string) => {
+    const o = readShopOrders().find((x) => x.order_no === orderNo);
+    return { prevAddress: o?.address ?? '', prevStatus: o?.status ?? '', prevStatusCn: o?.status_cn ?? '', prevRefund: o?.refund_status ?? '' };
+  }, []);
+
+  /** 撤销一次写操作：把地址/状态改回记录下来的旧值（演示用补偿，不改历史事件之外的任何东西）。 */
+  const undoWrite = useCallback((turn: Turn) => {
+    const u = turn.undo;
+    if (!u || u.done) return;
+    const cur = readShopOrders().find((x) => x.order_no === u.orderNo);
+    const evs = [...(cur?.events ?? []), { time: nowIso(), node: u.kind === 'address' ? 'address_reverted' : 'refund_reverted', city: '武汉' }];
+    if (u.kind === 'address') {
+      updateShopOrder(u.orderNo, { address: u.prevAddress || '', events: evs });
+    } else {
+      updateShopOrder(u.orderNo, { status: u.prevStatus || 'paid', status_cn: u.prevStatusCn || '已付款', refund_status: (u.prevRefund || 'none') as 'none' | 'requested', events: evs });
+    }
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('expwall:orders'));
+    update(turn.id, { undo: { ...u, done: true }, note: (turn.note ? turn.note + ' · ' : '') + '已撤销这次修改' });
+  }, []);
 
   /** 规则直出：不调模型，按意图直接执行工具（写操作也走「先确认」）。 */
   const deterministic = async (raw: string, d: RouteDecision, rt: ToolRuntime, id: string, userId: string, lastOrder = ''): Promise<string> => {
@@ -196,6 +266,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
       const args = pending.kind === 'address'
         ? { order_no: pending.orderNo, address: pending.address, confirmed: true }
         : { order_no: pending.orderNo, reason: pending.reason || '用户申请退款', confirmed: true };
+      const prev = prevOf(pending.orderNo);
       const env = await rt.call(tool, args);
       pushStep(id, { kind: 'tool', text: tool + '(' + JSON.stringify(args) + ')', env, obs: toObservation(env, 800) });
       pendingRef.current = null;
@@ -205,7 +276,10 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
             : '已为订单 ' + pending.orderNo + ' 提交退款申请，左侧商城的订单状态同步变成「退款审核中」。')
         : '执行失败：' + (env.error?.kind ?? '') + ' ' + (env.error?.message ?? '');
       record(answer);
-      update(id, { answer, running: false, mode: 'rule', note: '写操作已确认并执行' });
+      update(id, {
+        answer, running: false, mode: 'rule', note: '写操作已确认并执行',
+        undo: env.ok ? { kind: pending.kind, orderNo: pending.orderNo, ...prev } : undefined,
+      });
       setBusy(false);
       return;
     }
@@ -234,6 +308,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     try {
       let answer = '';
       let authFailedNo = '';
+      let undo: Undo | undefined;
       for (let step = 1; step <= maxSteps; step++) {
         let acc = '';
         const res = await chatStream(history, { temperature: 0.1, maxTokens: 400, signal: ctrl.signal, onToken: (c) => { acc += c; } });
@@ -251,7 +326,12 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
         pushStep(id, { kind: 'think', text: '模型第 ' + step + ' 步：' + text.slice(0, 400) });
         const tool = String(call.tool ?? '');
         const args = (call.args ?? {}) as Record<string, unknown>;
+        const isWrite = (tool === 'update_address' || tool === 'apply_refund') && args.confirmed === true;
+        const prev = isWrite ? prevOf(String(args.order_no ?? '')) : null;
         const env = await rt.call(tool, args);
+        if (env.ok && isWrite && prev) {
+          undo = { kind: tool === 'update_address' ? 'address' : 'refund', orderNo: String(args.order_no ?? ''), ...prev };
+        }
         if (!env.ok && env.error?.kind === 'AUTH_FAILED') authFailedNo = String(args.order_no ?? '');
         // 模型发起写操作后（need_confirmation），把动作挂起：下一句「确认」由本地直接执行，不依赖模型记得
         const need = (env as unknown as { data?: { need_confirmation?: boolean } }).data;
@@ -274,7 +354,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
         update(id, { answer, running: false, mode: 'live', note: '模型把归属校验失败说成了「查不到」，已按工具返回纠正' });
       } else {
         record(answer);
-        update(id, { answer, running: false, mode: 'live' });
+        update(id, { answer, running: false, mode: 'live', undo });
       }
     } catch (e) {
       if ((e as Error)?.name === 'AbortError') {
@@ -410,6 +490,9 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
             )}
             {t.answer && !t.running && (
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', fontSize: 10 }}>
+                {t.undo && !t.undo.done && (
+                  <button type="button" className="dp-btn" style={{ fontSize: 10, padding: '1px 8px', color: 'var(--warn)', borderColor: 'var(--warn)' }} onClick={() => undoWrite(t)} title="把这次改地址/退款改回去">撤销这次修改</button>
+                )}
                 {i === turns.length - 1 && (
                   <button type="button" className="dp-btn" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => regen(t)} title="用同一个问题再跑一次">重新生成</button>
                 )}
