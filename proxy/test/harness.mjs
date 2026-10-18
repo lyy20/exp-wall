@@ -381,6 +381,30 @@ async function runTests() {
     await ctx.close();
   }
 
+  console.log('== 7b. 同一轮问答只扣一次额度（x-llm-turn）');
+  {
+    // 每分钟只给 1 次：同一 turn 的第 2 次带同一个 id 应当放行，换 turn 才 429。
+    const ctx = await start({ LIMITS_JSON: JSON.stringify({ perMinute: 1, perDay: 10, globalPerDay: 100 }) });
+    const call = async (turn) => {
+      const res = await post('/api/llm/chat', chatBody, { ip: '192.0.2.61', headers: { 'x-llm-turn': turn } });
+      const code = res.status;
+      await res.text().catch(() => '');
+      return code;
+    };
+    const first = await call('turn_aaaa1');
+    const second = await call('turn_aaaa1');
+    const other = await call('turn_bbbb2');
+    const again = await call('turn_aaaa1');
+    check('同一 turn 的后续步骤不重复扣额度', first === 200 && second === 200, JSON.stringify([first, second]));
+    check('换一个 turn 才按正常额度判（分钟 1 次 → 429）', other === 429, String(other));
+    // 同一轮已经被拒（另一个 turn 抢了分钟额度）之后，这一轮自己的后续步骤仍然放行：
+    // 一轮的步数由 TURN_MAX_STEPS 封顶，不会无限放行。
+    check('本轮后续步骤继续放行（步数由 TURN_MAX_STEPS 封顶）', again === 200, String(again));
+    const st = await getStatus({ ip: '192.0.2.61' });
+    check('计数只 +1（一轮算一次）', st.json && st.json.counters && st.json.counters.minute === 1 && st.json.counters.day === 1, JSON.stringify(st.json && st.json.counters));
+    await ctx.close();
+  }
+
   console.log('== 8. embedding / rerank 走代理（配了 SILICONFLOW key 时）');
   {
     const ctx = await start({ SILICONFLOW_API_KEY: 'sk-test-sf', SILICONFLOW_BASE: 'http://127.0.0.1:' + upstreamPort });

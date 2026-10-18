@@ -222,7 +222,10 @@ async function handleChat(req: Request, env: Env, ctx: Ctx, origin: string, limi
   if (!env.RATE_KV) return fail(503, 'config-missing-kv', '服务端没有绑定 RATE_KV。', origin);
   if (!env.DEEPSEEK_API_KEY) return fail(503, 'config-missing-key', '服务端没有配置 DEEPSEEK_API_KEY。', origin);
 
-  const decision = await consume(env.RATE_KV, ip, limits, now, 'c');
+  // 一轮问答里可能有 2–4 次模型调用（ReAct 每步一次）：带上同一个 turn id，只扣一次额度。
+  const rawTurn = (req.headers.get('x-llm-turn') || '').trim();
+  const turnId = /^[A-Za-z0-9_-]{4,48}$/.test(rawTurn) ? rawTurn : '';
+  const decision = await consume(env.RATE_KV, ip, limits, now, 'c', turnId);
   if (!decision.ok) {
     return fail(429, decision.code || 'rate-limited', decision.message, origin, {
       retryAfterMs: decision.retryAfterMs,

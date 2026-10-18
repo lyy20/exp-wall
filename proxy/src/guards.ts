@@ -50,7 +50,8 @@ export function corsHeaders(origin: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    // x-llm-turn：同一轮问答的后续模型调用带着同一个 turn id，服务端据此只扣一次额度。
+    'Access-Control-Allow-Headers': 'Content-Type, x-llm-turn',
     'Access-Control-Expose-Headers': EXPOSED_HEADERS,
     'Access-Control-Max-Age': '3600',
     Vary: 'Origin',

@@ -260,7 +260,7 @@ async function main() {
     check("mock 代理支持测试控制面（每次验收前清零计数）", resetRes.status === 200 && Boolean(resetJson && resetJson.ok), String(resetRes.status) + " " + JSON.stringify(resetJson));
     st0 = await statusJson();
     check("mock 代理在线且开了 chat 通道", Boolean(st0.ok) && st0.caps.indexOf("chat") >= 0, JSON.stringify(st0.caps));
-    check("起点干净：计数 0/0、额度满格 3/30/200", st0.counters.minute === 0 && st0.counters.day === 0 && st0.counters.global === 0 && st0.remaining.minute === 3 && st0.remaining.day === 30, JSON.stringify(st0.counters) + " " + JSON.stringify(st0.remaining));
+    check("起点干净：计数 0/0、额度满格 3/60/200", st0.counters.minute === 0 && st0.counters.day === 0 && st0.counters.global === 0 && st0.remaining.minute === 3 && st0.remaining.day === 60, JSON.stringify(st0.counters) + " " + JSON.stringify(st0.remaining));
   }
 
   const browser = findBrowser();

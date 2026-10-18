@@ -57,6 +57,10 @@
 只防脚本刷接口，不抢用户提问的额度 —— 否则一次 RAG 提问 = 1 次 chat + 1 次 embedding + 1 次 rerank，
 用户问一句就把整分钟额度吃光。
 
+**额度按「一轮问答」计**：页面发 `x-llm-turn: <id>`，同一轮里 2–4 次模型调用（ReAct 每一步一次）
+只扣 1 次额度，同一 turn 最长 8 步、120 秒内有效（`TURN_MAX_STEPS` / `TURN_TTL_MS`）。
+不带这个头的请求按老规则每次各扣一次（harness / 脚本调用就是这种）。
+
 超出限额返回 `429` + `Retry-After`，并带 `error.code`：
 `per-minute` / `per-ip-day` / `global-day`（判据在 `proxy/src/limits.ts` 的 `verdict()`）。
 

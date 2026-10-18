@@ -37,6 +37,8 @@ export interface ChatOptions {
   maxTokens?: number;
   signal?: AbortSignal;
   onToken?: (chunk: string) => void;
+  /** 同一轮问答的 id：站内代理据此把多步调用算作一次提问（不传则每次调用各扣一次）。 */
+  turnId?: string;
 }
 
 export interface EmbedResult {
@@ -146,6 +148,7 @@ export async function chatStream(messages: ChatMessage[], opts: ChatOptions = {}
         maxTokens,
         signal: opts.signal,
         onToken: opts.onToken,
+        turnId: opts.turnId,
       });
       limiter.recordUsage(out.usage.promptTokens, out.usage.completionTokens);
       return out;

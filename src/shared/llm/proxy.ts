@@ -214,6 +214,8 @@ export interface ProxyChatOptions {
   maxTokens?: number;
   signal?: AbortSignal;
   onToken?: (chunk: string) => void;
+  /** 同一轮问答的 id（一轮里的多步调用只扣一次额度） */
+  turnId?: string;
 }
 
 /** 与 client.chatStream 同语义，只是请求发给站内代理；限流闸门由 client 统一加。 */
@@ -228,7 +230,10 @@ export async function chatViaProxy(messages: ChatMessage[], opts: ProxyChatOptio
       joinUrl(base, '/api/llm/chat'),
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(opts.turnId ? { 'x-llm-turn': opts.turnId } : {}),
+        },
         body: JSON.stringify({
           model,
           messages: messages.map((m) => ({ role: m.role, content: m.content })),

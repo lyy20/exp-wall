@@ -109,7 +109,7 @@ npm run preview  # 本地预览构建产物
 - 页面内所有配图均为本地程序化生成，不依赖外部图片服务。
 - **API key 只存在于你自己浏览器的 localStorage**：填了 key 就是浏览器**直连厂商**（BYOK），页面不经过本站任何服务器，也不上传、不记录。
 - 没填 key 时也不是回放：本站另部署了一个 Cloudflare Worker 作为**站内代理**（自有域名 `llm.agent-lyy.top`，密钥只在服务端，
-  浏览器里没有 key），在额度内直接真答并逐字流式；额度按 IP 3 次/分钟、30 次/天、全站 200 次/天，用完会明确返回 429 并提示你填自己的 key。
+  浏览器里没有 key），在额度内直接真答并逐字流式；额度按 IP 3 次/分钟、60 次/天、全站 200 次/天，用完会明确返回 429 并提示你填自己的 key；额度按「一轮问答」计（x-llm-turn），一次多步 ReAct 回答只扣 1 次。
   选路优先级 = **自填 key 直连 > 站内代理 > 录制回放**，徽标永远如实写明当前是哪一条（站内代理 / 自填 key / 回放）。
 - 站内代理覆盖三条通道：chat（DeepSeek）、embedding（`@cf/baai/bge-m3`，1024 维）、精排（`@cf/baai/bge-reranker-base`，
   有有效 `SILICONFLOW_API_KEY` 时优先用 SiliconFlow 的 bge-m3 / bge-reranker-v2-m3，失效才降级到 Workers AI，页面上照实显示真实模型名）。

@@ -97,7 +97,7 @@ export function App() {
         <div className="yy-layout">
           <ShopPanel session={session} onLogout={logout} />
           {assets
-            ? <AssistantSidebar assets={assets} llm={{ live: llm.live, mode: llm.mode }} />
+            ? <AssistantSidebar assets={assets} llm={{ live: llm.live, mode: llm.mode }} user={{ id: 'u_' + session.phone.slice(-3), name: session.name, phone: session.phone }} />
             : <aside className="dp-panel" style={{ padding: 14, fontSize: 12, color: 'var(--fg-faint)' }}>正在加载助手…</aside>}
         </div>
       </div>

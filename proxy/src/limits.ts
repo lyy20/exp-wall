@@ -1,6 +1,8 @@
 // 站内代理的限流与预算闸门：纯函数 + 可注入 KV（便于在 Node 里用真实代码做验收）。
 // 设计口径（与前端 KeyBar 上写的一致）：
-//   per-IP  3 次/分钟、30 次/天；全局 200 次/天；单次输出 <= 512 token；单次输入 <= 6000 字符/条。
+//   per-IP  3 次/分钟、60 次/天；全局 200 次/天；单次输出 <= 512 token；单次输入 <= 6000 字符/条。
+//   额度按「一轮问答」计（x-llm-turn），一轮里的多次模型调用不再重复扣费 —— 否则一次多步 ReAct 回答
+//   就会把整分钟额度吃掉，用户看到的就是「问一句就报请求过于频繁」。
 // KV 的 get/put 没有原子自增：并发下计数是「近似」的，所以真正的兜底是全局日预算闸门（超出即全站拒绝）。
 //
 // 额度按「通道」分作用域计数（一次 RAG 提问 = 1 次 chat + 1 次 embedding + 1 次 rerank，如果三者共用一份计数，
@@ -20,7 +22,7 @@ export interface Limits {
 
 export const DEFAULT_LIMITS: Limits = {
   perMinute: 3,
-  perDay: 30,
+  perDay: 60,
   globalPerDay: 200,
   maxOutputTokens: 512,
   maxInputChars: 6000,
@@ -64,11 +66,20 @@ export interface Ledger {
   ips: Record<string, number>;
   /** per-IP 的当前分钟桶计数：{ b: 分钟桶, n: 次数 }；桶不匹配即视为 0（旧桶条目写回时顺手清掉，值不会无限长大）。 */
   min: Record<string, { b: string; n: number }>;
+  /** 当前进行中的那一轮问答（x-llm-turn）：同 turn 的后续步骤不再扣额度。 */
+  turn?: TurnMark;
   /** usage 账目（只有 chat 记账）：成功调用次数与 token 数。 */
   calls: number;
   prompt: number;
   completion: number;
 }
+
+/** 一轮问答的标记：id + 这轮已用的步数 + 最近一次调用时间（毫秒）。 */
+export interface TurnMark { id: string; n: number; t: number }
+
+/** 同一轮的有效期与步数上限：超过任一条件就重新按正常额度计。 */
+export const TURN_TTL_MS = 120000;
+export const TURN_MAX_STEPS = 8;
 
 export function ledgerKey(now: number, scope: Scope = 'c'): string {
   return 'L:' + scope + ':' + utcDay(now);
@@ -101,7 +112,11 @@ async function readLedger(kv: KVLike, now: number, scope: Scope = 'c'): Promise<
         if (typeof e.b === 'string') min[k] = { b: e.b, n: safeCount(e.n) };
       }
     }
-    return { n: safeCount(j.n), ips, min, calls: safeCount(j.calls), prompt: safeCount(j.prompt), completion: safeCount(j.completion) };
+    const rawTurn = j.turn as { id?: unknown; n?: unknown; t?: unknown } | undefined;
+    const turn = rawTurn && typeof rawTurn.id === 'string' && rawTurn.id
+      ? { id: rawTurn.id, n: safeCount(rawTurn.n), t: safeCount(rawTurn.t) }
+      : undefined;
+    return { n: safeCount(j.n), ips, min, turn, calls: safeCount(j.calls), prompt: safeCount(j.prompt), completion: safeCount(j.completion) };
   } catch {
     return emptyLedger();
   }
@@ -195,11 +210,19 @@ export function verdict(c: Counters, limits: Limits, now: number): Decision {
 
 /** 判定并占用一次额度（拒绝时不占用）。 */
 /** 判定并占用一次额度（拒绝时不占用）：**只写一个键**（日账本），省 KV 写次数。 */
-export async function consume(kv: KVLike, ip: string, limits: Limits, now: number, scope: Scope = 'c'): Promise<Decision> {
+export async function consume(kv: KVLike, ip: string, limits: Limits, now: number, scope: Scope = 'c', turnId = ''): Promise<Decision> {
   const { counters, ledger } = await readState(kv, ip, now, scope);
-  const d = verdict(counters, limits, now);
+  // 同一轮问答的后续步骤：不重复扣额度（否则一次 2–4 步的 ReAct 回答就吃光整分钟额度）。
+  const mark = ledger.turn;
+  const continuation = !!turnId && !!mark && mark.id === turnId && now - mark.t < TURN_TTL_MS && mark.n < TURN_MAX_STEPS;
+  const d = continuation ? { ok: true, message: 'ok', retryAfterMs: 0, counters } : verdict(counters, limits, now);
   if (!d.ok) return d;
-  const next: Counters = { minute: counters.minute + 1, day: counters.day + 1, global: counters.global + 1 };
+  const next: Counters = continuation
+    ? counters
+    : { minute: counters.minute + 1, day: counters.day + 1, global: counters.global + 1 };
+  const nextTurn: TurnMark | undefined = turnId
+    ? { id: turnId, n: continuation ? (mark as TurnMark).n + 1 : 1, t: now }
+    : mark;
   const bucket = minuteBucket(now);
   // 顺手清掉别的分钟桶（它们已经不参与判定），账本体积只跟「当分钟活跃 IP 数」有关
   const min: Record<string, { b: string; n: number }> = { [ip]: { b: bucket, n: next.minute } };
@@ -209,8 +232,9 @@ export async function consume(kv: KVLike, ip: string, limits: Limits, now: numbe
   const nextLedger: Ledger = {
     ...ledger,
     n: next.global,
-    ips: { ...ledger.ips, [ip]: next.day },
+    ips: next.day === counters.day ? ledger.ips : { ...ledger.ips, [ip]: next.day },
     min,
+    turn: nextTurn,
   };
   await writeLedger(kv, now, scope, nextLedger);
   d.counters = next;
