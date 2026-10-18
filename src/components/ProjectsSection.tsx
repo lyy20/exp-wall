@@ -184,6 +184,18 @@ const PROJECTS: Project[] = [
   },
 ];
 
+// 堆叠参数。
+// 一行 = 一张卡，行高 85vh、`sticky` 钉在 top-24/md:top-32，所以**所有行钉在同一个高度**；
+// 层叠的错位由**卡片自己**的相对偏移 `top: index * PEEK` 产生 —— 这样间距就是一个常量。
+//
+// 为什么不能像以前那样靠 `items-center` + 相对偏移：卡片高度因内容而异（实测 565/568/619/638），
+// 垂直居中的偏移就各不相同，叠加后实测出来的间距是 37 / 10 / 28，完全不成层。
+// 改成 `items-start` 之后居中项消失，卡片顶边 = 行顶边 + 常量偏移，间距恒为 PEEK。
+// 行上的 `pt-[6vh]` 只是为了视觉上不要贴着顶（它对每张卡都一样，不影响间距）。
+//
+// PEEK 取 64：卡片内边距 24 + 标题一行约 36 ≈ 60，小于它就只能露出一条边、看不到标题。
+const PEEK = 64;
+
 function ProjectCard({
   project,
   index,
@@ -201,9 +213,9 @@ function ProjectCard({
   const demo = DEMO[project.id];
 
   return (
-    <div className="sticky top-24 flex h-[85vh] items-center justify-center md:top-32">
+    <div className="sticky top-24 flex h-[85vh] items-start justify-center pt-[6vh] md:top-32">
       <motion.div
-        style={{ scale, top: index * 28 }}
+        style={{ scale, top: index * PEEK }}
         className="relative w-full max-w-5xl origin-top rounded-[2.5rem] border-2 border-[#D7E2EA] bg-[#0C0C0C] p-5 shadow-2xl md:p-6"
       >
         <div className="flex items-start justify-between gap-4">
@@ -340,6 +352,14 @@ export default function ProjectsSection() {
             progress={scrollYProgress}
           />
         ))}
+        {/*
+          尾部留白：让四张卡有机会**同时钉住**。
+          没有它的话，容器高度正好等于四行之和，最后一行刚钉住、容器就到底了 ——
+          实测四张卡「同时钉住」的滚动窗口只有 1px，层叠永远只出现在过渡里，
+          拍不到稳定的四层台阶（用户看到的 37/10/28 那种间距就是这么来的）。
+          这段留白把解除 sticky 的边界往后推，于是有约半屏的滚动距离里是稳定的四层。
+        */}
+        <div aria-hidden className="h-[45vh]" />
       </div>
     </section>
   );
