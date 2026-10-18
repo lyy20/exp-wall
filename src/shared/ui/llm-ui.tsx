@@ -146,9 +146,9 @@ export function KeyBar({ llm, note }: { llm: LlmController; note?: string }) {
 
       <p style={{ margin: '9px 0 0', fontSize: 11, lineHeight: 1.6, color: 'var(--fg-faint)' }}>
         隐私与成本：填了 key 时，key 只写入你自己浏览器的 localStorage，浏览器直连服务商，本站不中转、不记录；没填 key 时走
-        <b>站内代理</b>（本站的 Cloudflare Worker，密钥只在服务端 secret 里），所以零配置也能真答，但额度有限（每 IP 每分钟 3 次 / 每天 30 次 / 全站每天 200 次 / 单次输出 ≤512 token），
-        超额会明确返回 429 并提示你填自己的 key。本机限流（每分钟 6 次 / 每次会话 60 次）只数真正调模型的次数；
-        走站内代理时 embedding 与精排由服务端单独限额，不占这份本机计数。
+        <b>站内代理</b>（本站的 Cloudflare Worker，密钥只在服务端 secret 里），所以零配置也能真答。
+        额度只有一条：**每天最多花 ¥5**（按 token 用量折算成人民币，输入 ¥2/1M、输出 ¥8/1M），不限问答次数、不限每分钟次数、不分 IP；
+        用完会明确返回 429（`budget-day`）并提示你填自己的 key，第二天 08:00 北京时间恢复。
         {provider?.note ? ' 提示：' + provider.note + '。' : ''}
         {note ? ' ' + note : ''}
       </p>
