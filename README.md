@@ -103,6 +103,10 @@ node D:\AI-Learning\scripts\_test-learn-embed.mjs
 **访问统计**：`/learn/` 的每一页会向 `POST https://llm.agent-lyy.top/api/visit` 打一个点（一次会话内同一页只打一次），读统计用
 `node D:\AI-Learning\scripts\visits.mjs --token <口令>`。为什么自己做、能统计到什么、怎么部署，见 `proxy/README.md` §7。
 
+**登录门禁**：`/learn/` 前面有一道登录页（VitePress 主题风格，只有部署到子路径的那一份生效，本地根路径版不拦）。
+凭据以 sha256 形式写在 `D:\AI-Learning\docs\.vitepress\theme\components\AuthGate.vue` 里，明文不进产物。
+⚠️ 这是**产品级**门禁不是安全边界 —— 正文已经写进静态 HTML，看源码能绕过；要真门禁得把校验放到 Cloudflare Worker 那一层。
+
 ## 部署
 
 推送到 `main` 即自动构建并发布到 GitHub Pages（`actions/configure-pages` → `actions/upload-pages-artifact` → `actions/deploy-pages`），无需手动上传产物，也不需要提交 `dist/`。
