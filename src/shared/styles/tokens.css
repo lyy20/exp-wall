@@ -240,6 +240,8 @@ select.dp-input {
     top: auto !important;
     max-height: 78vh !important;
     z-index: 60;
+    /* 抽屉是浮层：底色必须不透明，否则会透出下面的商城内容 */
+    background: #0E0F13 !important;
     box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
     transform: translateY(calc(100% + 28px));
     transition: transform 0.25s ease;
