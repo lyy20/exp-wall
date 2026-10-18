@@ -7,9 +7,11 @@
 
 | 入口 | 地址 | 这页能做什么 |
 | --- | --- | --- |
-| 作品集首页 | https://lyy20.github.io/exp-wall/ | 主视觉 + 3 张项目卡 + 2 块迷你面板（滚到就自动真跑，不用点按钮） |
+| 作品集首页 | https://lyy20.github.io/exp-wall/ | 主视觉 + 4 张项目卡 + 2 块迷你面板（滚到就自动真跑，不用点按钮） |
 | YYHelp 交互演示（商城 + AI 助手） | https://lyy20.github.io/exp-wall/yyhelp/ | 登录单独一屏（演示账号一键登录）→ 左侧商城：加购、填收货信息下单、申请退款 / 修改地址；右侧 AI 助手读同一份订单，给出「订单 2001 到哪了？」这类模板问题，打开「显示流程」可看每步工具调用（关闭只看结论）。助手记住上下文，可直接说「催一催」「把地址改成…」（写操作先确认、可撤销），刷新后会话保留，支持新会话 / 编辑重发；窄屏收成底部抽屉。另有**运营后台**（登录页切「管理员登录」，`admin / admin123`）：查看全部订单、审核用户退款（通过 / 驳回）、发货、签收、改地址——操作后用户端与助手立刻读到新状态。`/shop/` 会跳到这里 |
 | 科研文献 RAG 问答 | https://lyy20.github.io/exp-wall/rag/ | 问一句 → 真检索 → 真模型作答，答案带可展开的原文引用；20 题 Recall@5 / MRR 在浏览器里重算并与 Python 侧对照 |
+
+| AI 学习工作台 | https://lyy20.github.io/exp-wall/learn/ | 把前两个项目的代码逐页拆成讲义：182 页 / 73.5 万字、43 张自绘交互式架构图、241 张 Mermaid、8 页面试题。**AI 助教只在本地版可用**（它依赖本机 node 服务），静态发布版里会自己标成「静态发布版」并禁用输入 |
 
 两页都把「真跑什么」写在能验证的位置（数字、引用、工具返回），不把演示说成产品。
 
@@ -68,6 +70,38 @@ npm run dev      # http://localhost:5173（子页：/rag/ /yyhelp/）
 npm run build    # 输出到 dist/
 npm run preview  # 本地预览构建产物
 ```
+
+### 学习工作台（`/learn/`）
+
+`/learn/` **不是本仓库的 Vite/React 代码**，而是另一个项目（`D:\AI-Learning` 的 VitePress 站点）构建出来的静态快照，镜像进 `public/learn/`（678 个文件 / 约 66 MB）。它的主题、路由、暗色切换全是 VitePress 自己的，刻意没有跟着这个站的深色风格改 —— 那是一个独立工具，不是这个站的一个 section。
+
+刷新方式：
+
+```bash
+cd D:\AI-Learning
+npm run embed:learn          # 以 base=/learn/ 构建 → 改写裸 iframe → 镜像进 public/learn
+cd D:\DSH_Plot\hero-program
+npm run build                # 本仓库构建，把 public/learn 一起带进 dist
+```
+
+为什么是「把构建产物入库」而不是构建期引用那个目录：CI 跑在 GitHub 的 runner 上，那里既没有 `D:\AI-Learning`，也没装那套依赖，所以这份产物只能跟着仓库走。**代价是它会过期** —— 学习站内容一改就要重跑上面两条命令，否则 `/learn/` 里看到的还是上一次的版本。它是本站唯一一个「生成物入库」的例外，`dist/` 仍然不入库。
+
+三个必须知道的构建细节（都写在 `D:\AI-Learning\scripts\embed-learn.mjs` 的注释里）：
+
+1. **base 必须换**。VitePress 的 assets 前缀是构建期写死的；拿 `base: '/'` 的产物放进 `/learn/`，`/assets/*.js` 会指到站点根 → 白屏，而 HTML 本身照样返回 200。
+2. **cleanUrls 关掉**。生成带 `.html` 的链接，不依赖 GitHub Pages / Cloudflare 静态资源对无后缀路径的重写（两者行为并不一致）。
+3. **裸 iframe 要改写**。架构图用 `<iframe src="/fig/x.html">` 引，这是 Markdown 里的原始 HTML，VitePress **不会**给它加 base → 必须是脚本把 `"/fig/` 改成 `"/learn/fig/"`。漏掉的症状是「正文都在、图全白」。
+
+验收（先 `npm run preview`）：
+
+```bash
+node D:\AI-Learning\scripts\_test-learn-embed.mjs
+```
+
+它起一个 headless Edge 真跑一遍：正文与侧栏是否挂载、架构图是否真的画出来（脚本会主动滚到图的位置——iframe 是 `loading="lazy"`，不滚它根本不加载）、助教是否降级成只读，以及**所有 ≥400 的网络响应数**。最后一条是重点：子路径部署的 bug 基本都以 404 的形式出现，而页面本身返回的仍然是 200。
+
+**访问统计**：`/learn/` 的每一页会向 `POST https://llm.agent-lyy.top/api/visit` 打一个点（一次会话内同一页只打一次），读统计用
+`node D:\AI-Learning\scripts\visits.mjs --token <口令>`。为什么自己做、能统计到什么、怎么部署，见 `proxy/README.md` §7。
 
 ## 部署
 

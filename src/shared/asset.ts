@@ -7,6 +7,6 @@ export function asset(path: string): string {
 }
 
 /** 子页 / 首页的绝对链接 */
-export function page(name: 'home' | 'rag' | 'yyhelp'): string {
+export function page(name: 'home' | 'rag' | 'yyhelp' | 'learn'): string {
   return name === 'home' ? BASE : BASE + name + '/';
 }

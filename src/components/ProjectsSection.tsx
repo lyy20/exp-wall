@@ -3,11 +3,13 @@ import { motion, useScroll, useTransform, type MotionValue } from 'framer-motion
 import FadeIn from './FadeIn';
 import { page } from '../shared/asset';
 
-// 卡片 01-02 都做了可交互的独立页（同一仓库、同一域名）；03 只有公开仓库。
+// 卡片 01-02-04 都有独立页（同一仓库、同一域名）；03 只有公开仓库。
+// 04 是 VitePress 构建出来的静态站，镜像在 public/learn/（由 D:\AI-Learning 的 `npm run embed:learn` 生成）。
 const DEMO: Record<string, { href: string; label: string; external?: boolean }> = {
   '01': { href: page('yyhelp'), label: '进入交互 Demo' },
   '02': { href: page('rag'), label: '进入交互 Demo' },
   '03': { href: 'https://github.com/lyy20/RLforUSV_CTRIP', label: '查看公开仓库', external: true },
+  '04': { href: page('learn'), label: '进入学习工作台' },
 };
 
 interface StackGroup {
@@ -138,6 +140,42 @@ const PROJECTS: Project[] = [
       { value: '+64.9%', label: '最终奖励 vs PER-SAC' },
       { value: '92.98%', label: '测试生存率' },
       { value: '22.83 m', label: '平均跟踪距离（安全区间 15–30 m）' },
+    ],
+  },
+  {
+    id: '04',
+    name: 'AI 学习工作台',
+    tagline:
+      '把前两个项目的代码逐行拆成能复述、能复盘、能扛住追问的讲义，并配一个读过全站笔记的驻站助教。',
+    role: '独立开发 · 2026.10 — 至今',
+    stack: [
+      { label: '站点', items: ['VitePress 1.6', 'Markdown', 'Mermaid', 'MathJax'] },
+      { label: '图解', items: ['archify', '43 张交互式 SVG', '明暗双主题'] },
+      { label: '助教与检索', items: ['Express 5 + SSE', 'BM25 + 中文 bigram', 'DeepSeek'] },
+    ],
+    points: [
+      {
+        tag: '拆解而不复述',
+        text: 'YYHelp 18 页 + RAG 15 页，每一层结论都落在具体文件行号上；v1 只作为「为什么要改成 v2」的对照保留 —— 面试问的是演进因果，不是版本清单。',
+      },
+      {
+        tag: '口径纪律',
+        text: '没实测过的一律标「未验证」并写下验收命令；引用数字必带样本量、日期与是否含 rerank。宁可留一个待核对占位，也不给一个查不到出处的数字。',
+      },
+      {
+        tag: '自绘 43 张图',
+        text: '全部用 archify 从代码事实重画，每张过 validate + visual-check 双验收 —— 图能扛住追问才算画完，不是好看就算。',
+      },
+      {
+        tag: '驻站助教',
+        text: 'Node 侧把全站笔记切块建 BM25 索引（中文按 bigram，避开跨进程分词器依赖），命中后拼进 system prompt 再以 SSE 流式转发模型；静态发布时自动降级为只读。',
+      },
+    ],
+    metrics: [
+      { value: '182 篇', label: '站内页面 · 73.5 万字' },
+      { value: '43 张', label: '交互式架构图' },
+      { value: '241 张', label: 'Mermaid 图' },
+      { value: '0', label: '全站死链（脚本扫描）' },
     ],
   },
 ];
@@ -275,7 +313,7 @@ export default function ProjectsSection() {
         </FadeIn>
         <FadeIn delay={0.1}>
           <p className="mx-auto mt-5 max-w-[560px] text-xs leading-relaxed text-[#D7E2EA]/70 md:text-sm">
-            两段独立交付的工程项目，加一段第一作者科研经历。下面每张卡片都能对上简历里的每一句。
+            两段独立交付的工程项目、一段第一作者科研经历，外加一个把前两者拆开重讲的 AI 学习工作台。下面每张卡片都能对上简历里的每一句。
           </p>
         </FadeIn>
       </div>

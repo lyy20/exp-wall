@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>面试自测台 · AI-Learning</title>
+<style>
+  :root {
+    --bg:#fff; --fg:#1f2328; --muted:#6b7280; --card:#f6f7f9; --line:#e5e7eb;
+    --accent:#3b6cf6; --ok:#15803d; --warn:#b45309; --bad:#b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181d; --fg:#e6e8eb; --muted:#9aa1ab; --card:#1e2128; --line:#2c3038;
+            --accent:#7aa2ff; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:18px;background:var(--bg);color:var(--fg);
+       font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header,main,footer{max-width:920px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:12px}
+  .sub a{color:var(--accent)}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .row .lbl{font-size:12px;color:var(--muted);min-width:52px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:13px}
+  .stat b{font-size:15px}
+  button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);
+         border-radius:8px;padding:4px 10px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+  button.ok.on{border-color:var(--ok);color:var(--ok)}
+  button.warn.on{border-color:var(--warn);color:var(--warn)}
+  button.bad.on{border-color:var(--bad);color:var(--bad)}
+  .groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin:10px 0 16px}
+  .gi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px}
+  .gi .gt{display:flex;justify-content:space-between;margin-bottom:6px}
+  .gi .gd{color:var(--muted);font-size:11.5px;margin-bottom:6px}
+  .bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;display:flex}
+  .bar i{display:block;height:100%}
+  .bar i.ok{background:var(--ok)} .bar i.warn{background:var(--warn)} .bar i.bad{background:var(--bad)}
+  .q{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-bottom:11px}
+  .q .meta{font-size:12px;color:var(--muted);margin-bottom:4px;display:flex;gap:8px;flex-wrap:wrap}
+  .q .title{font-weight:600;margin-bottom:9px}
+  .q .ans{display:none;border-left:3px solid var(--accent);padding-left:12px;margin:9px 0}
+  .q.open .ans{display:block}
+  .q .ans ul{margin:6px 0;padding-left:19px}
+  .q .ans li{margin:3px 0}
+  .q .src{font-size:12px;margin-top:8px}
+  .q .src a{color:var(--accent)}
+  .q .rate{display:none;gap:6px;margin-top:9px;flex-wrap:wrap}
+  .q.open .rate{display:flex}
+  .badge{font-size:11.5px;padding:1px 6px;border-radius:6px;border:1px solid var(--line)}
+  .badge.ok{color:var(--ok);border-color:var(--ok)}
+  .badge.warn{color:var(--warn);border-color:var(--warn)}
+  .badge.bad{color:var(--bad);border-color:var(--bad)}
+  .empty{color:var(--muted);text-align:center;padding:36px 0}
+  footer{color:var(--muted);font-size:12px;margin-top:20px}
+  code{background:rgba(127,127,127,.16);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>面试自测台</h1>
+  <div class="sub">
+    <b id="total">加载中…</b> 道高频题，按 <b>开场 → YYHelp 项目 → RAG 项目 → Agent 常识 → RAG 常识 → 工程 → 边界</b> 七组组织。
+    先自己答，再点开对照；自评只存在本机浏览器。
+    题源：<a href="/learn/interview/">面试页</a> · <a href="/learn/interview/architecture-ab">架构对比实验</a> ·
+    <a href="/learn/projects/yyhelp/11-evaluation">评测</a> · <a href="/learn/projects/yyhelp/14-serving">服务化</a> ·
+    <a href="/learn/projects/rag/">RAG 项目</a>
+  </div>
+  <div class="row" id="stats"></div>
+  <div class="row"><span class="lbl">掌握度筛选</span><span id="filterstate"></span>
+    <button id="reset" style="margin-left:auto">重置记录</button></div>
+  <div class="groups" id="groups"></div>
+</header>
+<main id="list"></main>
+<footer>
+  快捷键：<code>空格</code> 显示/隐藏答案 · <code>1</code> 会 · <code>2</code> 模糊 · <code>3</code> 不会 · <code>r</code> 重置。
+  题库真源：<code>/practice/questions.json</code>（数据与视图分离，加题只改这个文件）。
+</footer>
+
+<script>
+const KEY = "ai-learning-practice-v2";
+const state = JSON.parse(localStorage.getItem(KEY) || "{}");
+let DATA = null, filterG = "all", filterS = "todo";
+
+const save = () => localStorage.setItem(KEY, JSON.stringify(state));
+const rateOf = i => state[i] || null;
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]));
+const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`(.+?)`/g, "<code>$1</code>");
+
+function mark(i, v) { if (v === null) delete state[i]; else state[i] = v; save(); render(); }
+
+function render() {
+  const Q = DATA.questions, G = DATA.groups;
+  const byG = {};
+  G.forEach(g => byG[g.id] = { total: 0, ok: 0, warn: 0, bad: 0, todo: 0 });
+  Q.forEach((q, i) => {
+    const s = byG[q.g]; if (!s) return;
+    s.total++;
+    const r = rateOf(i);
+    if (r === "ok") s.ok++; else if (r === "warn") s.warn++;
+    else if (r === "bad") s.bad++; else s.todo++;
+  });
+  const tot = { total: Q.length, ok: 0, warn: 0, bad: 0, todo: 0 };
+  Object.values(byG).forEach(s => { tot.ok += s.ok; tot.warn += s.warn; tot.bad += s.bad; tot.todo += s.todo; });
+
+  document.getElementById("total").textContent = tot.total;
+  document.getElementById("stats").innerHTML =
+    `<span class="stat">共 <b>${tot.total}</b> 题</span>` +
+    `<span class="stat">未答 <b>${tot.todo}</b></span>` +
+    `<span class="stat">会 <b style="color:var(--ok)">${tot.ok}</b></span>` +
+    `<span class="stat">模糊 <b style="color:var(--warn)">${tot.warn}</b></span>` +
+    `<span class="stat">不会 <b style="color:var(--bad)">${tot.bad}</b></span>` +
+    `<span class="stat">掌握率 <b>${Math.round(tot.ok / tot.total * 100)}%</b></span>`;
+
+  const S = [["todo","未答"],["bad","不会"],["warn","模糊"],["ok","会"],["all","全部"]];
+  document.getElementById("filterstate").innerHTML =
+    S.map(([k, l]) => `<button data-s="${k}" class="${filterS===k?"on":""}">${l}</button>`).join(" ");
+
+  document.getElementById("groups").innerHTML =
+    G.map(g => {
+      const s = byG[g.id];
+      return `<div class="gi" data-g="${g.id}" style="cursor:pointer;${filterG===g.id?"border-color:var(--accent)":""}">
+        <div class="gt"><b>${g.label}</b><span>${s.ok}/${s.total}</span></div>
+        <div class="gd">${g.desc}</div>
+        <div class="bar"><i class="ok" style="width:${s.ok/s.total*100}%"></i>
+          <i class="warn" style="width:${s.warn/s.total*100}%"></i>
+          <i class="bad" style="width:${s.bad/s.total*100}%"></i></div>
+      </div>`;
+    }).join("") +
+    `<div class="gi" data-g="all" style="cursor:pointer;${filterG==="all"?"border-color:var(--accent)":""}">
+      <div class="gt"><b>全部题目</b><span>${tot.ok}/${tot.total}</span></div>
+      <div class="gd">点分组筛选；再点一次取消</div>
+      <div class="bar"><i class="ok" style="width:${tot.ok/tot.total*100}%"></i>
+        <i class="warn" style="width:${tot.warn/tot.total*100}%"></i>
+        <i class="bad" style="width:${tot.bad/tot.total*100}%"></i></div>
+    </div>`;
+
+  const idx = Q.map((q, i) => i).filter(i => {
+    if (filterG !== "all" && Q[i].g !== filterG) return false;
+    const r = rateOf(i);
+    if (filterS === "all") return true;
+    if (filterS === "todo") return !r;
+    return r === filterS;
+  });
+
+  const list = document.getElementById("list");
+  if (!idx.length) {
+    list.innerHTML = `<div class="empty">这个筛选下没有题目 🎉<br><br>
+      <button onclick="filterS='all';render()">看这个分组的全部题</button></div>`;
+    return;
+  }
+  list.innerHTML = idx.map(i => {
+    const q = Q[i], r = rateOf(i);
+    const g = G.find(x => x.id === q.g);
+    const badge = r ? `<span class="badge ${r}">${r==="ok"?"会":r==="warn"?"模糊":"不会"}</span>` : "";
+    return `<div class="q" id="q${i}">
+      <div class="meta"><span>${g ? g.label : ""}</span><span>${q.lv}</span>${badge}</div>
+      <div class="title">${md(q.q)}</div>
+      <button onclick="toggle(${i})" id="btn${i}">想好了，看答案</button>
+      <div class="ans"><ul>${q.a.map(x => `<li>${md(x)}</li>`).join("")}</ul>
+        <div class="src">出处：<a href="${q.src[0]}" target="_blank" rel="noreferrer">${q.src[1]}</a></div></div>
+      <div class="rate">
+        <button class="ok" onclick="mark(${i},'ok')">会（1）</button>
+        <button class="warn" onclick="mark(${i},'warn')">模糊（2）</button>
+        <button class="bad" onclick="mark(${i},'bad')">不会（3）</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function toggle(i) {
+  const el = document.getElementById("q" + i);
+  el.classList.toggle("open");
+  document.getElementById("btn" + i).textContent =
+    el.classList.contains("open") ? "收起答案" : "想好了，看答案";
+}
+
+document.addEventListener("click", e => {
+  const gi = e.target.closest(".gi[data-g]");
+  if (gi) { filterG = (filterG === gi.dataset.g ? "all" : gi.dataset.g); render(); return; }
+  const sb = e.target.closest("button[data-s]");
+  if (sb) { filterS = sb.dataset.s; render(); return; }
+  const q = e.target.closest(".q");
+  if (q) cur = Number(q.id.slice(1));
+});
+document.getElementById("reset").onclick = () => {
+  if (confirm("清空全部自评记录？")) { Object.keys(state).forEach(k => delete state[k]); save(); render(); }
+};
+
+let cur = null;
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === " " && cur !== null) { e.preventDefault(); toggle(cur); }
+  else if (["1","2","3"].includes(e.key) && cur !== null) mark(cur, {"1":"ok","2":"warn","3":"bad"}[e.key]);
+  else if (e.key === "r") document.getElementById("reset").click();
+});
+
+fetch("questions.json", { cache: "no-cache" })
+  .then(r => r.json())
+  .then(d => { DATA = d; filterS = "todo"; render(); })
+  .catch(err => {
+    document.getElementById("list").innerHTML =
+      `<div class="empty">题库加载失败：${esc(err.message)}<br>请确认 /practice/questions.json 可访问。</div>`;
+  });
+</script>
+</body>
+</html>
