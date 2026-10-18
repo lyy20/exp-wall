@@ -33,6 +33,13 @@ export function ShopPanel({ session, onLogout }: { session: Session; onLogout: (
     return () => { if (t) window.clearTimeout(t); };
   }, [toast]);
 
+  // 助手改了地址/退了款 → 左侧订单列表跟着刷新（不刷新页面）。
+  useEffect(() => {
+    const on = () => setOrders(userOrders(session.phone));
+    window.addEventListener('expwall:orders', on);
+    return () => window.removeEventListener('expwall:orders', on);
+  }, [session.phone]);
+
   const lines = useMemo(
     () => PRODUCTS.filter((p) => (cart[p.sku] ?? 0) > 0).map((p) => ({ p, qty: cart[p.sku] })),
     [cart],

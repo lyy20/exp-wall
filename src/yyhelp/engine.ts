@@ -1,6 +1,7 @@
 // P2 引擎：意图路由（规则优先 + LLM 兜底）+ 5 个工具的真实实现（浏览器内跑，逐字复刻项目行为）。
 import type { IntentsFile, YyAssets, YyExit, YyKbChunk, YyKbMeta, YyOrder, YyRule } from './assets';
 import { cnum } from './assets';
+import { readShopOrders, updateShopOrder } from './storeOrders';
 
 export const STATUS_CN: Record<string, string> = {
   created: '已创建', paid: '已付款', shipped: '已发货', signed: '已签收', closed: '已关闭',
@@ -209,9 +210,66 @@ export class ToolRuntime {
     };
   }
 
+  /** 商城里的订单要落盘（localStorage）；fixture 订单只改内存副本。写入后广播事件，左侧商城会刷新。 */
+  private persistOrder(o: YyOrder, patch: Record<string, unknown>): void {
+    const shop = readShopOrders().find((x) => x.order_no === o.order_no);
+    if (shop) updateShopOrder(o.order_no, patch as Partial<typeof shop>);
+    Object.assign(o as unknown as Record<string, unknown>, patch);
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('expwall:orders'));
+  }
+
+  private findOrder(order_no: string): YyOrder {
+    const on = String(order_no ?? '').trim();
+    if (!/^\d{3,}$/.test(on)) throw new ToolError('INVALID_ARGS', 'order_no 格式不合法', '通常是 4 位以上数字，例如 1001');
+    const o = this.a.orders.find((x) => x.order_no === on);
+    if (!o) throw new ToolError('NOT_FOUND', '未找到订单 ' + on);
+    return o;
+  }
+
+  /** 改收货地址（写操作，必须确认后才落库）。 */
+  private doUpdateAddress(order_no: string, address: string, confirmed: boolean) {
+    const o = this.findOrder(order_no);
+    const addr = String(address ?? '').trim();
+    if (addr.length < 6) throw new ToolError('INVALID_ARGS', 'address 至少 6 个字', '请向用户要完整地址（省市区 + 门牌）');
+    if (!confirmed) {
+      return {
+        need_confirmation: true, order_no: o.order_no,
+        will_do: '把订单 ' + o.order_no + ' 的收货地址改成「' + addr + '」',
+        current_address: (o as unknown as { address?: string }).address || '（fixture 订单没有收货地址字段）',
+        hint: '请用户确认后带 confirmed=true 重新调用',
+      };
+    }
+    const previous = (o as unknown as { address?: string }).address || '';
+    const time = new Date().toISOString();
+    this.persistOrder(o, { address: addr, events: [...o.events, { time, node: 'address_changed', city: '武汉' }] });
+    return { need_confirmation: false, updated: true, order_no: o.order_no, address: addr, previous_address: previous };
+  }
+
+  /** 提交退款（写操作，必须确认后才改状态）。 */
+  private doApplyRefund(order_no: string, reason: string, confirmed: boolean) {
+    const o = this.findOrder(order_no);
+    if (!o.refundable) throw new ToolError('POLICY_BLOCKED', '订单 ' + o.order_no + ' 不满足退款条件');
+    const why = String(reason ?? '').trim() || '用户申请退款';
+    if (!confirmed) {
+      return {
+        need_confirmation: true, order_no: o.order_no,
+        will_do: '为订单 ' + o.order_no + ' 提交退款申请（原因：' + why + '）',
+        amount: o.total_amount,
+        hint: '请用户确认后带 confirmed=true 重新调用',
+      };
+    }
+    const time = new Date().toISOString();
+    this.persistOrder(o, {
+      status: 'refund_pending', status_cn: '退款审核中', refund_status: 'requested',
+      events: [...o.events, { time, node: 'refund_requested', city: '武汉' }],
+    });
+    return { need_confirmation: false, refund_status: 'requested', order_no: o.order_no, amount: o.total_amount, reason: why };
+  }
+
   async call(name: string, args: Record<string, unknown>): Promise<ToolEnvelope> {
     const tool = this.a.tools.find((t) => t.name === name);
-    const side = tool?.side_effect === 'write' ? 'write' : 'read';
+    const WRITE = ['create_ticket', 'update_address', 'apply_refund'];
+    const side = WRITE.indexOf(name) >= 0 || tool?.side_effect === 'write' ? 'write' : 'read';
     const t0 = performance.now();
     const key = await idemKey(name, args, this.threadId);
     const finish = (env: ToolEnvelope): ToolEnvelope => {
@@ -232,6 +290,8 @@ export class ToolRuntime {
       else if (name === 'search_kb') data = this.stubSearchKb(String(args.query ?? ''), Number(args.top_k ?? 3));
       else if (name === 'query_refund_policy') data = this.doQueryRefundPolicy(String(args.order_no ?? ''), String(args.aspect ?? ''));
       else if (name === 'create_ticket') data = await this.doCreateTicket(String(args.order_no ?? ''), String(args.reason ?? ''), Number(args.amount ?? 0), args.confirmed === true);
+      else if (name === 'update_address') data = this.doUpdateAddress(String(args.order_no ?? ''), String(args.address ?? ''), args.confirmed === true);
+      else if (name === 'apply_refund') data = this.doApplyRefund(String(args.order_no ?? ''), String(args.reason ?? ''), args.confirmed === true);
       else throw new ToolError('INTERNAL', '未实现的工具 ' + name);
       const env: ToolEnvelope = { tool: name, ok: true, data, error: null, idempotency_key: key, elapsed_ms: 0, meta: { side_effect: side } };
       if (side === 'write' && data && data.need_confirmation) {

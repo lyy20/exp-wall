@@ -225,3 +225,37 @@ select.dp-input {
     grid-template-columns: minmax(0, 1fr) 400px;
   }
 }
+
+/* 窄屏：AI 助手收成底部抽屉 —— 商城占满屏，点右下角「AI 助手」展开；桌面端这些规则不生效。 */
+.yy-assistant-toggle,
+.yy-sheet-close {
+  display: none;
+}
+@media (max-width: 1039px) {
+  .yy-assistant {
+    position: fixed !important;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    top: auto !important;
+    max-height: 78vh !important;
+    z-index: 60;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+    transform: translateY(calc(100% + 28px));
+    transition: transform 0.25s ease;
+  }
+  .yy-assistant.is-open {
+    transform: none;
+  }
+  .yy-assistant-toggle {
+    display: inline-flex;
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 61;
+    padding: 10px 18px;
+  }
+  .yy-sheet-close {
+    display: inline-flex !important;
+  }
+}
