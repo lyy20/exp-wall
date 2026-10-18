@@ -297,6 +297,14 @@ async function main() {
     const bucketAtStart = Math.floor(Date.now() / 60000);
     console.log("  （已对齐到分钟桶开头，桶内剩余 " + Math.round((60000 - (Date.now() % 60000)) / 1000) + "s）");
 
+    // 站内额度按 IP 每天 30 次：当天跑过多轮之后，聊天断言必然全红（不是产品问题）。
+    // 明确退出码 2 并打印原因，避免把「额度用完」误读成回归。
+    const stStart = await statusJson();
+    if (LIVE && stStart.remaining && stStart.remaining.day === 0) {
+      console.log("  当日站内额度已用完（remaining.day = 0）→ 跳过聊天断言，退出码 2（不是失败）");
+      process.exit(2);
+    }
+
     console.log("== A. 无 key + 徽标必须写「站内代理」");
     const creds = await cdp.eval("__acc.creds()");
     check("localStorage 里没有任何 key（真正的零配置访客）", creds === null, String(creds));

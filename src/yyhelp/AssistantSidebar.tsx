@@ -166,7 +166,8 @@ export function AssistantSidebar({ assets, llm }: { assets: YyAssets; llm: { liv
     <aside className="dp-panel" style={{ position: 'sticky', top: 92, display: 'grid', gridTemplateRows: 'auto auto minmax(180px, 1fr) auto', gap: 10, padding: 14, minWidth: 0, maxHeight: 'calc(100vh - 110px)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--fg)' }}>AI 客服助手</span>
-        <Badge tone={llm.live ? 'live' : 'replay'}>{llm.live ? '站内代理' : '规则直出'}</Badge>
+        {/* 与全站约定一致：站内代理 = accent（青紫），规则直出 = replay 色 */}
+        <Badge tone={llm.live ? 'accent' : 'replay'}>{llm.live ? '站内代理' : '规则直出'}</Badge>
         <span style={{ flex: 1 }} />
         <button
           type="button"
