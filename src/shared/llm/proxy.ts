@@ -23,6 +23,12 @@ export interface ProxyLimits {
   maxTotalChars: number;
 }
 
+export interface ProxyBudget {
+  limitYuan: number;
+  spentYuan: number;
+  remainingYuan: number;
+}
+
 export interface ProxyStatus {
   ok: true;
   caps: string[];
@@ -31,8 +37,8 @@ export interface ProxyStatus {
   embedModels: string[];
   rerankModels: string[];
   limits: ProxyLimits;
-  counters: { minute: number; day: number; global: number };
-  remaining: { minute: number; day: number; global: number };
+  /** 额度口径是「每天最多花多少钱」，不再有每分钟/每 IP 的次数限制。 */
+  budget: ProxyBudget;
   usage: { calls: number; promptTokens: number; completionTokens: number };
   serverTime: string;
   note?: string;
@@ -110,11 +116,10 @@ export function proxyHas(cap: 'chat' | 'embed' | 'rerank'): boolean {
   return Boolean(cache && cache.caps.indexOf(cap) >= 0);
 }
 
-/** 有代理、探活成功、且今天/本分钟的站内额度还没用完。 */
+/** 有代理、探活成功、且今天的 ¥5 预算还没花完。 */
 export function proxyReady(): boolean {
   if (!cache) return false;
-  const r = cache.remaining;
-  return r.minute > 0 && r.day > 0 && r.global > 0;
+  return (cache.budget?.remainingYuan ?? 0) > 0;
 }
 
 /** GET /api/llm/status：8 秒超时，失败按 30 秒缓存，避免离线时反复打空请求。 */
@@ -135,7 +140,7 @@ export async function probeProxy(force = false): Promise<ProxyStatus | null> {
         throw new Error('HTTP ' + res.status + (detail ? ' · ' + detail.slice(0, 160) : ''));
       }
       const json = (await res.json()) as ProxyStatus;
-      if (!json || json.ok !== true || !json.remaining) throw new Error('返回格式不符合预期');
+      if (!json || json.ok !== true || !json.budget) throw new Error('返回格式不符合预期');
       cache = json;
       cacheAt = Date.now();
       failure = null;
@@ -158,20 +163,21 @@ function headerNumber(res: Response, name: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** 用响应头里的剩余额度更新缓存，省掉一次 /status 往返。 */
+/** 用响应头里的预算更新缓存，省掉一次 /status 往返。 */
 function applyRemaining(res: Response): void {
   if (!cache) return;
-  const m = headerNumber(res, 'X-Proxy-Remaining-Minute');
-  const d = headerNumber(res, 'X-Proxy-Remaining-Day');
-  const g = headerNumber(res, 'X-Proxy-Remaining-Global');
-  if (m === null && d === null && g === null) return;
+  const b = headerNumber(res, 'X-Proxy-Budget-Yuan');
+  const s = headerNumber(res, 'X-Proxy-Spent-Yuan');
+  const r = headerNumber(res, 'X-Proxy-Remaining-Yuan');
+  if (b === null && s === null && r === null) return;
   // 刻意 **原地改** 而不是 cache = { ...cache }：这份 cache 会被 useLlm 存进 React state、
-  // 也可能被别处持有；重新赋值等于换对象，所有旧引用会永久停在第一次探活时的额度快照上
-  // （现象：提问后详情栏的「站内额度」不再自己掉，额度耗尽的警示永远不出现）。
-  cache.remaining = {
-    minute: m === null ? cache.remaining.minute : m,
-    day: d === null ? cache.remaining.day : d,
-    global: g === null ? cache.remaining.global : g,
+  // 也可能被别处持有；重新赋值等于换对象，所有旧引用会永久停在第一次探活时的预算快照上
+  // （现象：提问后详情栏的「今日已用」不再自己涨）。
+  const cur = cache.budget;
+  cache.budget = {
+    limitYuan: b === null ? cur.limitYuan : b,
+    spentYuan: s === null ? cur.spentYuan : s,
+    remainingYuan: r === null ? cur.remainingYuan : r,
   };
   cacheAt = Date.now();
 }
@@ -192,11 +198,11 @@ async function toError(res: Response): Promise<LlmError> {
   } catch {
     /* 非 JSON 错误体 */
   }
-  if (code === 'per-minute' || code === 'per-day' || code === 'global-day') {
+  if (code === 'budget-day') {
     return new LlmError(
       'proxy-quota',
-      '站内额度用完：' + message,
-      (hint ? hint + '；' : '') + '想继续问就填自己的 key —— 只存本机 localStorage，直连服务商。',
+      '今天的站内预算（¥5）已用完',
+      '明天 08:00（北京时间）恢复；想现在继续就填自己的 key —— 只存本机 localStorage，直连服务商。',
     );
   }
   if (code === 'config-missing-kv' || code === 'config-missing-key') {
@@ -214,8 +220,6 @@ export interface ProxyChatOptions {
   maxTokens?: number;
   signal?: AbortSignal;
   onToken?: (chunk: string) => void;
-  /** 同一轮问答的 id（一轮里的多步调用只扣一次额度） */
-  turnId?: string;
 }
 
 /** 与 client.chatStream 同语义，只是请求发给站内代理；限流闸门由 client 统一加。 */
@@ -230,10 +234,7 @@ export async function chatViaProxy(messages: ChatMessage[], opts: ProxyChatOptio
       joinUrl(base, '/api/llm/chat'),
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(opts.turnId ? { 'x-llm-turn': opts.turnId } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
           messages: messages.map((m) => ({ role: m.role, content: m.content })),

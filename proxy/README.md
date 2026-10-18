@@ -14,8 +14,8 @@
 挂不了 Pages Functions / 任何服务端代码。Workers 免费额度足够这个站点的量。
 
 **当前处于哪种模式，页面上永远显式写出**（徽标三态：`实时` / `站内代理` / `回放`），
-额度用完时也不会偷偷退回回放 —— 徽标照旧写着「站内代理」，下一次提问真的发出去、
-拿服务端 429，再把「站内额度用完，请填自己的 key」写在面板上。
+预算用完时也不会偷偷退回回放 —— 徽标照旧写着「站内代理」，下一次提问真的发出去、
+拿服务端 429（budget-day），再把「今天的站内预算已用完，请填自己的 key」写在面板上。
 
 ---
 
@@ -23,7 +23,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/llm/status` | 能力（caps）、模型白名单、额度上下限、当前计数与剩余、usage 记账、服务器时间 |
+| GET | `/api/llm/status` | 能力（caps）、模型白名单、每日预算（上限/已用/剩余）、usage 记账、服务器时间 |
 | POST | `/api/llm/chat` | 转发 `/chat/completions`，**SSE 逐字透传，绝不缓冲** |
 | POST | `/api/llm/embeddings` | `BAAI/bge-m3`（SiliconFlow）或 `@cf/baai/bge-m3`（Workers AI 兜底） |
 | POST | `/api/llm/rerank` | `BAAI/bge-reranker-v2-m3`（SiliconFlow）或 `@cf/baai/bge-reranker-base`（Workers AI 兜底） |
@@ -31,10 +31,10 @@
 
 - 服务端**强制**注入 `stream: true` 与 `stream_options.include_usage: true`，
   并把 `max_tokens` 夹到上限（默认 512）；客户端传什么都改不了这两条。
-- 每次成功响应带额度响应头：`X-Proxy-Remaining-Minute` / `-Day` / `-Global`
+- 每次成功响应带预算响应头：`X-Proxy-Budget-Yuan` / `X-Proxy-Spent-Yuan` / `X-Proxy-Remaining-Yuan`
   （已写进 `Access-Control-Expose-Headers`，否则浏览器里读不到 —— 见 §4 的坑）。
 - 失败一律是结构化 JSON：`{ "error": { "code": "...", "message": "..." } }`，
-  `code` 用于前端把 429 映射成「站内额度用完」而不是「网络错误」。
+  `code`（`budget-day`）用于前端把 429 映射成「今天的站内预算已用完」而不是「网络错误」。
 
 前端选路在 `src/shared/llm/client.ts`（`resolveChatTargetOrNull` / `resolveEmbedTargetOrNull`），
 代理实现在 `src/shared/llm/proxy.ts`（与 BYOK 同签名的 `chatViaProxy` / `embedViaProxy` / `rerankViaProxy`）。
@@ -45,24 +45,18 @@
 
 | 项 | 默认 | 说明 |
 | --- | --- | --- |
-| per-IP 每分钟 | 3 | 按**分钟桶**计数（`Math.floor(now/60000)`），桶一换就重置 |
-| per-IP 每天 | 30 | UTC 日 |
-| 全站每天 | 200 | 兜底预算：超了全站拒绝（KV 计数非原子，并发下靠这道闸门兜底） |
-| 单次输出 | ≤512 token | 服务端夹取 |
+| 每天预算 | **¥5** | 按 token 用量折算成人民币记账（输入 ¥2/1M、输出 ¥8/1M），**不限问答次数、不限每分钟次数、不分 IP** |
+| 单次输出 | ≤512 token | 服务端夹取（请求参数，不是额度） |
 | 单次输入 | ≤6000 字符/条、≤12 条消息、总计 ≤12000 字符 | 超长直接 400 |
 | 模型 | `deepseek-chat` / `deepseek-reasoner`（embed / rerank 各自白名单） | 不在白名单直接 400 |
 
-**额度按通道分作用域**：`scope 'c'`（chat）是用户可见的那一份，`/status` 与响应头报的都是它；
-`scope 'a'`（embedding / rerank）额度是 chat 的 6 倍（`AUX_FACTOR`，见 `proxy/src/limits.ts`），
-只防脚本刷接口，不抢用户提问的额度 —— 否则一次 RAG 提问 = 1 次 chat + 1 次 embedding + 1 次 rerank，
-用户问一句就把整分钟额度吃光。
+**额度只有一个口径：钱。** 每次成功调用按 `usage` 里的 token 折算成人民币记进当天的日账本；
+`/status` 返回 `budget: { limitYuan, spentYuan, remainingYuan }`，响应头带
+`X-Proxy-Budget-Yuan` / `X-Proxy-Spent-Yuan` / `X-Proxy-Remaining-Yuan`。
+embedding / rerank 的价格按 0 计（`auxLimits()`），所以一次 RAG 提问不会因为检索/精排把预算吃光。
 
-**额度按「一轮问答」计**：页面发 `x-llm-turn: <id>`，同一轮里 2–4 次模型调用（ReAct 每一步一次）
-只扣 1 次额度，同一 turn 最长 8 步、120 秒内有效（`TURN_MAX_STEPS` / `TURN_TTL_MS`）。
-不带这个头的请求按老规则每次各扣一次（harness / 脚本调用就是这种）。
-
-超出限额返回 `429` + `Retry-After`，并带 `error.code`：
-`per-minute` / `per-ip-day` / `global-day`（判据在 `proxy/src/limits.ts` 的 `verdict()`）。
+超出预算返回 `429` + `Retry-After`，`error.code = budget-day`（判据在 `proxy/src/limits.ts` 的 `consume()`）。
+按次数的闸门（per-minute / per-ip-day / global-day）已经全部移除。
 
 ## 3. fail-closed 清单（宁可不服务，也不静默降级）
 
@@ -96,13 +90,13 @@ npx vite preview --port 5188 --strictPort   # 服务 dist，与 CI 产物同一�
 node proxy/test/replay-fallback.mjs         # 11 条断言，exit 0 才算过
 ```
 
-① 测的是 Worker 本身（CORS、限流、预算、白名单、SSE 透传、usage 记账、额度响应头）；
+① 测的是 Worker 本身（CORS、预算、白名单、SSE 透传、usage 记账、预算响应头）；
 ② 测的是**用户真能看见的东西**：无 key 访客的徽标是「站内代理」、逐字流式（采样到递增的中间态 + 流式光标）、
 额度从 3 掉到 2 且页面上自己更新、连问 4 次第 4 次拿到 429 且提示「想继续问就填自己的 key」、
 另外两个 demo 页的徽标同样明写「站内代理」、页面无未捕获异常。
 
 ③ 测的是**反向**：没配 `VITE_PROXY_BASE_URL` 时（= 你还没配 Worker 地址时的线上状态）页面必须老实退化成
-「回放」——徽标是「回放」且不出现「站内代理」徽标、不出现「站内额度：」、点「提问」按真实节奏逐字回放录制答案
+「回放」——徽标是「回放」且不出现「站内代理」徽标、不出现「站内预算」、点「提问」按真实节奏逐字回放录制答案
 （采样到递增的中间态 + 流式光标）、明写「零配置：按真实节奏回放录制的模型输出…」、页面无未捕获异常。
 这条是 P5 改动的护栏：`ModeBadge` 的 `mode` 变必填、`AskPanel` 加了 streaming 分支之后，
 「没有代理」的路径必须和改动前一模一样。
@@ -173,7 +167,7 @@ curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status"
 curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status" -H "Origin: https://example.com"
 ```
 
-浏览器里打开线上 `/rag/`：徽标应显示「站内代理」（accent 色），KeyBar 里写「站内额度：本分钟剩 3/3」；
+浏览器里打开线上 `/rag/`：徽标应显示「站内代理」（accent 色），详情栏写「站内预算：今天已用 ¥x · 上限 ¥5」；
 点一次「提问」应逐字出字、额度掉到 2；连点 4 次，第 4 次应拿到 429 与「想继续问就填自己的 key」。
 想临时换一个代理地址做对照，可以直接加参数：`/rag/?proxy=http://127.0.0.1:8822`（只影响当前浏览器）。
 

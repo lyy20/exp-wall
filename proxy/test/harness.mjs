@@ -264,7 +264,7 @@ async function runTests() {
     const ctx = await start();
     const st = await getStatus();
     check('status ok + caps 只有 chat', st.status === 200 && st.json && st.json.ok === true && JSON.stringify(st.json.caps) === '["chat"]', JSON.stringify(st.json && st.json.caps));
-    check('status 带限流与剩余额度', st.json && st.json.remaining && st.json.remaining.minute === 3 && st.json.limits.perMinute === 3, JSON.stringify(st.json && st.json.remaining));
+    check('status 带每日预算（¥5）且没有每分钟/每 IP 次数限制', st.json && st.json.budget && st.json.budget.limitYuan === 5 && st.json.budget.remainingYuan === 5 && st.json.limits.perMinute === undefined, JSON.stringify(st.json && st.json.budget));
     check('status 带模型白名单', st.json && st.json.models.indexOf('deepseek-chat') >= 0, JSON.stringify(st.json && st.json.models));
     await ctx.close();
   }
@@ -319,13 +319,13 @@ async function runTests() {
     check('temperature 被夹到 [0,1]', captured[0] && captured[0].temperature === 1, JSON.stringify(captured[0] && captured[0].temperature));
     check('max_tokens 被夹到 512', captured[0] && captured[0].max_tokens === 512, JSON.stringify(captured[0] && captured[0].max_tokens));
     check('服务端强制 stream + include_usage', captured[0] && captured[0].stream === true && captured[0].stream_options && captured[0].stream_options.include_usage === true, JSON.stringify(captured[0] && captured[0].stream_options));
-    check('响应头带剩余额度', res.headers.get('x-proxy-remaining-minute') === '2', String(res.headers.get('x-proxy-remaining-minute')));
+    check('响应头带每日预算（上限/已用/剩余）', res.headers.get('x-proxy-budget-yuan') === '5' && Number(res.headers.get('x-proxy-remaining-yuan')) > 0, String(res.headers.get('x-proxy-budget-yuan')) + ' / ' + String(res.headers.get('x-proxy-remaining-yuan')));
     // 浏览器验收（ui-accept.mjs）抓出来的真缺陷：跨源响应里 JS 只能读 Access-Control-Expose-Headers 列出的头。
     // 少了这一行，前端 applyRemaining 恒读不到 null，页面上的「站内额度」就永远停在进页面时的快照。
     check(
       'CORS 把额度响应头 expose 出去（跨源时浏览器才读得到）',
-      String(res.headers.get('access-control-expose-headers')).indexOf('X-Proxy-Remaining-Minute') >= 0 &&
-        String(res.headers.get('access-control-expose-headers')).indexOf('X-Proxy-Remaining-Day') >= 0,
+      String(res.headers.get('access-control-expose-headers')).indexOf('X-Proxy-Remaining-Yuan') >= 0 &&
+        String(res.headers.get('access-control-expose-headers')).indexOf('X-Proxy-Spent-Yuan') >= 0,
       String(res.headers.get('access-control-expose-headers')),
     );
     await sleep(50);
@@ -334,74 +334,50 @@ async function runTests() {
     await ctx.close();
   }
 
-  console.log('== 5. 每 IP 每分钟 3 次：第 4 次 429');
+  console.log('== 5. 不限每分钟次数 / 不限每 IP（只限每天的钱）');
   {
     const ctx = await start();
     const codes = [];
-    for (let i = 0; i < 4; i += 1) {
+    for (let i = 0; i < 6; i += 1) {
       const res = await post('/api/llm/chat', chatBody, { ip: '198.51.100.9' });
       codes.push(res.status);
       if (res.status === 200) await res.text();
-      else {
-        const j = await res.json();
-        if (i === 3) check('第 4 次报错码是 per-minute 且带 retryAfterMs', j.error.code === 'per-minute' && typeof j.error.retryAfterMs === 'number' && j.error.retryAfterMs > 0, JSON.stringify(j.error));
-      }
     }
-    check('前三放行第四拒绝', JSON.stringify(codes) === '[200,200,200,429]', JSON.stringify(codes));
+    check('同一分钟连发 6 次全部放行', JSON.stringify(codes) === '[200,200,200,200,200,200]', JSON.stringify(codes));
     const other = await post('/api/llm/chat', chatBody, { ip: '198.51.100.10' });
-    check('换一个 IP 不受影响（限额是按 IP 的）', other.status === 200, String(other.status));
+    check('换 IP 也一样（没有按 IP 的次数限制）', other.status === 200, String(other.status));
     if (other.body) await other.text();
     await ctx.close();
   }
 
-  console.log('== 6. 全局日预算闸门');
+  console.log('== 6. 每日预算（¥5）：用完后 429 budget-day');
   {
-    const ctx = await start({ LIMITS_JSON: JSON.stringify({ perMinute: 50, perDay: 50, globalPerDay: 2 }) });
+    // 假上游一次调用 usage = 12 prompt + 34 completion；按默认价 ≈ ¥0.000296。
+    // 把预算压到 ¥0.0001，第一次（判定时花费还是 0）放行，第二次就会被拒。
+    const ctx = await start({ LIMITS_JSON: JSON.stringify({ dailyBudgetYuan: 0.0001 }) });
     const a = await post('/api/llm/chat', chatBody, { ip: '192.0.2.1' });
-    const b = await post('/api/llm/chat', chatBody, { ip: '192.0.2.2' });
-    const c = await post('/api/llm/chat', chatBody, { ip: '192.0.2.3' });
-    const j = await c.json();
-    check('前两次放行（不同 IP）', a.status === 200 && b.status === 200, String(a.status) + '/' + String(b.status));
-    check('第三次撞全局预算 429 code=global-day', c.status === 429 && j.error.code === 'global-day', String(c.status) + ' ' + JSON.stringify(j.error && j.error.code));
     if (a.body) await a.text();
-    if (b.body) await b.text();
+    await sleep(80);
+    const b = await post('/api/llm/chat', chatBody, { ip: '192.0.2.2' });
+    const j = await b.json();
+    check('撞预算时 429 且 code=budget-day', b.status === 429 && j.error.code === 'budget-day', String(b.status) + ' ' + JSON.stringify(j.error && j.error.code));
+    check('预算是全站共享的（换 IP 也拦）', b.status === 429, String(b.status));
+    check('429 带 retryAfterMs（到 UTC 零点恢复）', j.error.retryAfterMs > 0, String(j.error.retryAfterMs));
     await ctx.close();
   }
 
-  console.log('== 7. 每 IP 每日 30 次');
+  console.log('== 7. 花费按 token 记账');
   {
-    const ctx = await start({ LIMITS_JSON: JSON.stringify({ perMinute: 100, perDay: 3, globalPerDay: 100 }) });
-    const codes = [];
-    for (let i = 0; i < 4; i += 1) {
-      const res = await post('/api/llm/chat', chatBody, { ip: '192.0.2.50' });
-      codes.push(res.status);
-      if (res.body) await res.text();
-    }
-    check('每 IP 日限额生效（3 次后 429）', JSON.stringify(codes) === '[200,200,200,429]', JSON.stringify(codes));
-    await ctx.close();
-  }
-
-  console.log('== 7b. 同一轮问答只扣一次额度（x-llm-turn）');
-  {
-    // 每分钟只给 1 次：同一 turn 的第 2 次带同一个 id 应当放行，换 turn 才 429。
-    const ctx = await start({ LIMITS_JSON: JSON.stringify({ perMinute: 1, perDay: 10, globalPerDay: 100 }) });
-    const call = async (turn) => {
-      const res = await post('/api/llm/chat', chatBody, { ip: '192.0.2.61', headers: { 'x-llm-turn': turn } });
-      const code = res.status;
-      await res.text().catch(() => '');
-      return code;
-    };
-    const first = await call('turn_aaaa1');
-    const second = await call('turn_aaaa1');
-    const other = await call('turn_bbbb2');
-    const again = await call('turn_aaaa1');
-    check('同一 turn 的后续步骤不重复扣额度', first === 200 && second === 200, JSON.stringify([first, second]));
-    check('换一个 turn 才按正常额度判（分钟 1 次 → 429）', other === 429, String(other));
-    // 同一轮已经被拒（另一个 turn 抢了分钟额度）之后，这一轮自己的后续步骤仍然放行：
-    // 一轮的步数由 TURN_MAX_STEPS 封顶，不会无限放行。
-    check('本轮后续步骤继续放行（步数由 TURN_MAX_STEPS 封顶）', again === 200, String(again));
-    const st = await getStatus({ ip: '192.0.2.61' });
-    check('计数只 +1（一轮算一次）', st.json && st.json.counters && st.json.counters.minute === 1 && st.json.counters.day === 1, JSON.stringify(st.json && st.json.counters));
+    const ctx = await start();
+    const a = await post('/api/llm/chat', chatBody, { ip: '192.0.2.50' });
+    if (a.body) await a.text();
+    await sleep(120);
+    const st = await getStatus();
+    const spent = st.json && st.json.budget ? st.json.budget.spentYuan : -1;
+    const expect = (12 * 2 + 34 * 8) / 1e6;
+    check('一次调用按 token 折算成钱（12+34 token ≈ ¥0.000296）', Math.abs(spent - expect) < 1e-6, String(spent) + ' vs ' + String(expect));
+    check('剩余预算 = 上限 - 已用', st.json && Math.abs(st.json.budget.remainingYuan - (5 - expect)) < 1e-6, JSON.stringify(st.json && st.json.budget));
+    check('precise：仍然报 ¥5 上限', st.json && st.json.budget.limitYuan === 5, JSON.stringify(st.json && st.json.budget));
     await ctx.close();
   }
 
@@ -430,11 +406,11 @@ async function runTests() {
     await em.text();
     const rr = await post('/api/llm/rerank', { model: 'BAAI/bge-reranker-v2-m3', query: 'q', documents: ['d1'], top_n: 1 });
     await rr.text();
-    check('embedding 响应头报的是 chat 那份剩余额度', em.headers.get('x-proxy-remaining-minute') === '3', String(em.headers.get('x-proxy-remaining-minute')));
+    check('embedding 响应头报的是 chat 那份预算', em.headers.get('x-proxy-budget-yuan') === '5', String(em.headers.get('x-proxy-budget-yuan')));
     const st = await getStatus();
-    check('只发 embedding/rerank 时 chat 额度未被动用', st.json.counters.minute === 0 && st.json.remaining.minute === 3, JSON.stringify(st.json.counters));
+    check('只发 embedding/rerank 时 chat 预算没被花', st.json.budget.spentYuan === 0, JSON.stringify(st.json.budget));
 
-    // 一次真实提问 = embedding + rerank + chat；连问 3 次都应该成功，第 4 次提问的 chat 才 429
+    // 一次真实提问 = embedding + rerank + chat；aux 的价格按 0 计，不会让预算提前耗尽
     const codes = [];
     for (let i = 0; i < 3; i += 1) {
       const a = await post('/api/llm/embeddings', q);
@@ -449,10 +425,10 @@ async function runTests() {
     }
     check('3 次完整提问（各 3 个请求）全部放行', JSON.stringify(codes) === JSON.stringify([200, 200, 200, 200, 200, 200, 200, 200, 200]), JSON.stringify(codes));
     const st2 = await getStatus();
-    check('chat 额度记了 3 次（embedding/rerank 记在 aux 那份）', st2.json.counters.minute === 3 && st2.json.counters.day === 3, JSON.stringify(st2.json.counters));
+    check('chat 只花了 3 次的钱，embedding/rerank 不占预算', st2.json.budget.spentYuan > 0 && st2.json.budget.spentYuan < 0.005, JSON.stringify(st2.json.budget));
     const fourth = await post('/api/llm/chat', chatBody);
-    const fj = await fourth.json();
-    check('第 4 次提问的 chat 才 429（per-minute）', fourth.status === 429 && fj.error.code === 'per-minute', String(fourth.status) + ' ' + JSON.stringify(fj.error && fj.error.code));
+    await fourth.text();
+    check('第 4 次提问照常放行（没有次数限制）', fourth.status === 200, String(fourth.status));
     await ctx.close();
   }
 
@@ -520,7 +496,7 @@ async function runTests() {
     const st = await getStatus();
     check('一次成功 chat 恰好 2 次 put（额度 1 + 记账 1）', ctx.env.RATE_KV._puts === 2, String(ctx.env.RATE_KV._puts));
     check('只存在一个日账本键（L:c: 前缀）', Array.from(ctx.env.RATE_KV._map.keys()).filter((k) => k.indexOf('L:c:') === 0).length === 1, JSON.stringify(Array.from(ctx.env.RATE_KV._map.keys())));
-    check('当日计数与 usage 都从账本读出来', st.json && st.json.counters.day === 1 && st.json.counters.global === 1 && st.json.usage.calls === 1 && st.json.usage.completionTokens === 34, JSON.stringify({ c: st.json && st.json.counters, u: st.json && st.json.usage }));
+    check('当日花费与 usage 都从账本读出来', st.json && st.json.budget.spentYuan > 0 && st.json.budget.spentYuan < 0.01 && st.json.usage.calls === 1 && st.json.usage.completionTokens === 34, JSON.stringify({ b: st.json && st.json.budget, u: st.json && st.json.usage }));
     await ctx.close();
   }
 

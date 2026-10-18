@@ -148,7 +148,7 @@ const HELPERS = [
   "  badgeColors: function () { return Array.prototype.map.call(document.querySelectorAll('span.dp-badge'), function (b) { return [b.textContent.trim(), b.style.color]; }); },",
   "  countBadge: function (t) { return this.badges().filter(function (x) { return x === t; }).length; },",
   "  lines: function () { return document.body.innerText.split(String.fromCharCode(10)); },",
-  "  bar: function () { var t = this.lines(); for (var i = 0; i < t.length; i += 1) { var k = t[i].indexOf('站内额度：'); if (k >= 0) return t[i].slice(k); } return ''; },",
+  "  bar: function () { var t = this.lines(); for (var i = 0; i < t.length; i += 1) { var k = t[i].indexOf('站内预算'); if (k >= 0) return t[i].slice(k); } return ''; },",
   "  openDetails: function () { var n = 0; var ds = document.querySelectorAll('details'); for (var i = 0; i < ds.length; i += 1) { if (!ds[i].open) { var s = ds[i].querySelector('summary'); if (s) { s.click(); n += 1; } } } return n; },",
   "  bodyText: function () { return document.body.innerText; },",
   "  qInput: function () { var all = document.querySelectorAll('input.dp-input'); for (var i = 0; i < all.length; i += 1) { if ((all[i].placeholder || '').indexOf('问点关于') === 0) return all[i]; } return null; },",
@@ -251,7 +251,7 @@ async function main() {
   if (LIVE) {
     st0 = await statusJson();
     check("线上 Worker 在线且开了 chat 通道（Origin 白名单生效）", Boolean(st0.ok) && st0.caps.indexOf("chat") >= 0, JSON.stringify(st0.caps));
-    console.log("  （LIVE：本分钟已用 " + st0.counters.minute + "，当日 " + st0.counters.day + "/" + (st0.limits ? st0.limits.perDay : "?") + "，全站 " + st0.counters.global + "/" + (st0.limits ? st0.limits.globalPerDay : "?") + "）");
+    console.log("  （LIVE：今日已花 ¥" + (st0.budget ? st0.budget.spentYuan : "?") + " / ¥" + (st0.budget ? st0.budget.limitYuan : "?") + "）");
   } else {
     // 先把内存 KV 清零：mock 代理是常驻进程，上一轮验收/探针留下的计数会让
     // 「刚好第 4 次被拒」「usage.calls === 3」这类绝对断言失真。
@@ -260,7 +260,7 @@ async function main() {
     check("mock 代理支持测试控制面（每次验收前清零计数）", resetRes.status === 200 && Boolean(resetJson && resetJson.ok), String(resetRes.status) + " " + JSON.stringify(resetJson));
     st0 = await statusJson();
     check("mock 代理在线且开了 chat 通道", Boolean(st0.ok) && st0.caps.indexOf("chat") >= 0, JSON.stringify(st0.caps));
-    check("起点干净：计数 0/0、额度满格 3/60/200", st0.counters.minute === 0 && st0.counters.day === 0 && st0.counters.global === 0 && st0.remaining.minute === 3 && st0.remaining.day === 60, JSON.stringify(st0.counters) + " " + JSON.stringify(st0.remaining));
+    check("起点干净：预算满格 ¥5，且没有每分钟/每 IP 次数限制", Boolean(st0.budget) && st0.budget.limitYuan === 5 && st0.budget.spentYuan === 0 && st0.budget.remainingYuan === 5, JSON.stringify(st0.budget));
   }
 
   const browser = findBrowser();
@@ -297,11 +297,10 @@ async function main() {
     const bucketAtStart = Math.floor(Date.now() / 60000);
     console.log("  （已对齐到分钟桶开头，桶内剩余 " + Math.round((60000 - (Date.now() % 60000)) / 1000) + "s）");
 
-    // 站内额度按 IP 每天 30 次：当天跑过多轮之后，聊天断言必然全红（不是产品问题）。
-    // 明确退出码 2 并打印原因，避免把「额度用完」误读成回归。
+    // 额度口径是「每天最多花 ¥5」：不再有每分钟/每 IP 的次数限制，所以也不需要对齐分钟桶。
     const stStart = await statusJson();
-    if (LIVE && stStart.remaining && stStart.remaining.day === 0) {
-      console.log("  当日站内额度已用完（remaining.day = 0）→ 跳过聊天断言，退出码 2（不是失败）");
+    if (LIVE && stStart.budget && stStart.budget.remainingYuan <= 0) {
+      console.log("  今日站内预算已用完（remainingYuan = 0）→ 跳过聊天断言，退出码 2（不是失败）");
       process.exit(2);
     }
 
@@ -311,14 +310,12 @@ async function main() {
     const colors = JSON.parse(await cdp.eval("JSON.stringify(__acc.badgeColors())"));
     check("页面上有「站内代理」徽标", colors.some((b) => b[0] === "站内代理"), JSON.stringify(colors));
     check("徽标用的是 accent 色（不是回放色）", colors.some((b) => b[0] === "站内代理" && b[1] === "var(--accent)"), JSON.stringify(colors));
-    // 额度条靠 1.5s ticker 刷新：刚跨过分钟桶时它还显示上一桶的 2/3，直接断言会假失败。
-    // 先等它自己刷到满格再读（这本身也在验证「页面上的额度是活的」）。
     let barBefore = "";
     try {
-      await waitFor(cdp, "__acc.bar().indexOf(\"站内额度：本分钟剩 3/3\") >= 0", "额度条刷新到满格 3/3", 22000, 250);
+      await waitFor(cdp, "__acc.bar().indexOf(\"站内预算\") >= 0", "预算条出现", 20000, 250);
       barBefore = await cdp.eval("__acc.bar()");
     } catch (err) { barBefore = await cdp.eval("__acc.bar()"); }
-    check("详情栏写明站内额度 3 次/分钟", barBefore.indexOf("站内额度：本分钟剩 3/3") >= 0, barBefore);
+    check("详情栏写明站内预算（¥5/天，只按花费限制、不限次数）", barBefore.indexOf("站内预算") >= 0 && barBefore.indexOf("¥5") >= 0, barBefore);
 
     console.log("== B/C/D. 真点一次「提问」");
     const r1 = await askOnce(cdp, QUESTION);
@@ -333,53 +330,31 @@ async function main() {
       check("服务端注入了 stream_options.include_usage", r1.text.indexOf("include_usage") >= 0, r1.text.slice(0, 200));
       check("服务端把 max_tokens 夹到 512", r1.text.indexOf("max_tokens=512") >= 0, r1.text.slice(0, 200));
     }
-    // 额度数字靠 QuotaBar 的 1.5s ticker 刷新，不能立刻断言，要等它自己掉下来
+    // 预算数字靠 QuotaBar 的 1.5s ticker 刷新，不能立刻断言
     let barAfter = "";
     try {
-      await waitFor(cdp, "__acc.bar().indexOf(\"站内额度：本分钟剩 2/3\") >= 0", "答案详情栏额度掉到 2", 8000, 250);
+      await waitFor(cdp, "__acc.bar() !== " + JSON.stringify(barBefore), "预算条自己涨了", 10000, 250);
       barAfter = await cdp.eval("__acc.bar()");
     } catch (err) { barAfter = await cdp.eval("__acc.bar()"); }
-    check("详情栏的站内额度自己掉到 2（不需要重新提问才更新）", barAfter.indexOf("站内额度：本分钟剩 2/3") >= 0, barAfter);
+    check("详情栏的「今天已用」自己涨了（不需要重新提问才更新）", barAfter !== barBefore && barAfter.indexOf("站内预算") >= 0, barAfter);
     const st1 = await statusJson();
-    check("服务端计数：chat 只记了 1 次", st1.counters.minute === 1 && st1.remaining.minute === 2, JSON.stringify(st1.counters));
+    check("服务端预算：花掉的钱 > 0 且远小于 ¥5", Boolean(st1.budget) && st1.budget.spentYuan > 0 && st1.budget.spentYuan < 5, JSON.stringify(st1.budget));
     if (LIVE) {
       check("服务端 usage 记账：确实累计了 token（浏览器里没有 key 也有账）", st1.usage.calls >= 1 && st1.usage.promptTokens > 0 && st1.usage.completionTokens > 0, JSON.stringify(st1.usage));
     } else {
       check("服务端 usage 记账：1 次调用 · 12 prompt / 34 completion", st1.usage.calls === 1 && st1.usage.promptTokens === 12 && st1.usage.completionTokens === 34, JSON.stringify(st1.usage));
     }
 
-    console.log("== E/F. 连问 4 次：第 4 次必须被服务端拒绝");
-    // 真上游的回答里不会有假上游的落款，所以 LIVE 下退化成「有像样的正文」
+    console.log("== E/F. 连问 3 次都不会被次数限制挡住（只有每日 ¥5 预算）");
     const okAnswer = (s) => (LIVE ? s.trim().length >= 10 : s.indexOf("本地假上游") >= 0);
     const r2 = await askOnce(cdp, QUESTION);
-    check("第 2 次提问正常出答案", okAnswer(r2.text), r2.text.slice(0, 80));
+    check("第 2 次提问正常出答案（没有每分钟次数限制）", okAnswer(r2.text), r2.text.slice(0, 80));
     const r3 = await askOnce(cdp, QUESTION);
     check("第 3 次提问正常出答案", okAnswer(r3.text), r3.text.slice(0, 80));
     const st3 = await statusJson();
-    check("服务端计数：3 次（额度刚好用完）", st3.counters.minute === 3 && st3.remaining.minute === 0, JSON.stringify(st3.counters));
-    // 额度警示在「用自己的 key / 额度」折叠区里（页面默认只留问答与结果）。先展开，再等它随额度归零刷新出来：
-    // 页面上的数字靠 15s 一次的后台探测保持新鲜，刚用完的那几秒可能还没翻牌。
-    await cdp.eval("window.__acc && __acc.openDetails ? __acc.openDetails() : 0");
-    let warn = "";
-    try {
-      await waitFor(cdp, "__acc.bodyText().indexOf(\"站内额度已用完\") >= 0", "额度警示出现", 20000, 250);
-      warn = await cdp.eval("__acc.bodyText()");
-    } catch (err) { warn = await cdp.eval("__acc.bodyText()"); }
-    check("界面上出现「站内额度已用完」警示（额度耗尽必须写在页面上）", warn.indexOf("站内额度已用完") >= 0, warn.slice(0, 200));
-    check("警示写明「下一次提问会被服务端明确拒绝（429）」", warn.indexOf("下一次提问会被服务端明确拒绝（429）") >= 0, warn.slice(0, 200));
-
-    const r4 = await askOnce(cdp, QUESTION);
-    // 只看面板是否存在：采样循环最后一帧可能抓到上一轮遗留的流式光标（如 "…▍"），拿它当「有答案」是误判。
-    check("第 4 次页面上没有回答面板（没有偷偷回放一段答案）", r4.hasPanel === false, "hasPanel=" + r4.hasPanel + " lastSample=" + r4.text.slice(0, 60));
-    check("第 4 次页面出现「站内额度用完」（describeError 的标题）", r4.body.indexOf("站内额度用完") >= 0, r4.body.slice(0, 300));
-    check("第 4 次页面出现服务端原话「请求过于频繁」", r4.body.indexOf("请求过于频繁") >= 0, r4.body.slice(0, 300));
-    check("第 4 次页面给出出路「想继续问就填自己的 key」（proxy.ts 的 hint，不是 KeyBar 的隐私文案）", r4.body.indexOf("想继续问就填自己的 key") >= 0, r4.body.slice(0, 400));
-    check("第 4 次徽标仍是「站内代理」（额度用完不等于退回回放）", r4.badges.filter((b) => b === "站内代理").length >= 1, JSON.stringify(r4.badges));
-    const st4 = await statusJson();
-    check("服务端计数停在第 3 次（第 4 次没被放行）", st4.counters.minute === 3 && (LIVE ? st4.remaining.minute === 0 : st4.usage.calls === 3), JSON.stringify(st4.counters) + " " + JSON.stringify(st4.usage));
-    // 若是跨了分钟桶，上面 E/F 的失败都是测试自身的假失败（不是产品问题）—— 明确标出来，别让人误读
-    const bucketAtEnd = Math.floor(Date.now() / 60000);
-    check("整轮点击没有跨分钟桶（跨桶会让第 4 次被误放行，属测试假失败，重跑即可）", bucketAtEnd === bucketAtStart, "bucket " + bucketAtStart + " -> " + bucketAtEnd);
+    check("3 次提问都在花钱（预算按 token 递减）", Boolean(st3.budget) && st3.budget.spentYuan > (st1.budget ? st1.budget.spentYuan : 0), JSON.stringify(st3.budget));
+    check("仍然远低于 ¥5 上限（不因子数被拒）", st3.budget.remainingYuan > 0, JSON.stringify(st3.budget));
+    check("没有出现「请求过于频繁」这类次数限制文案", (await cdp.eval("__acc.bodyText()")).indexOf("请求过于频繁") < 0, "");
 
     console.log("== G. 另一个 demo 页（/yyhelp/）的徽标必须同样明写「站内代理」（不能各页各说各话）");
     const origin = new URL(ACCEPT_URL).origin;

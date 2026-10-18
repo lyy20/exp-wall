@@ -1,29 +1,28 @@
-// 站内代理的限流与预算闸门：纯函数 + 可注入 KV（便于在 Node 里用真实代码做验收）。
-// 设计口径（与前端 KeyBar 上写的一致）：
-//   per-IP  3 次/分钟、60 次/天；全局 200 次/天；单次输出 <= 512 token；单次输入 <= 6000 字符/条。
-//   额度按「一轮问答」计（x-llm-turn），一轮里的多次模型调用不再重复扣费 —— 否则一次多步 ReAct 回答
-//   就会把整分钟额度吃掉，用户看到的就是「问一句就报请求过于频繁」。
-// KV 的 get/put 没有原子自增：并发下计数是「近似」的，所以真正的兜底是全局日预算闸门（超出即全站拒绝）。
-//
-// 额度按「通道」分作用域计数（一次 RAG 提问 = 1 次 chat + 1 次 embedding + 1 次 rerank，如果三者共用一份计数，
-// 用户问一句就把整分钟额度吃光）：
-//   scope 'c'（chat）    —— 用户可见的那份额度：perMinute / perDay / globalPerDay 原样适用，/status 与响应头报的都是这一份。
-//   scope 'a'（aux）     —— embedding / rerank：额度按 AUX_FACTOR 放宽，只防脚本刷接口，不抢用户提问的额度。
+// 站内代理的预算闸门：按「每天最多花多少钱」限制，不再限制每分钟次数 / 每 IP 次数。
+// 口径：每天 ¥5（UTC 日切，北京时间的次日 08:00）；每次调用按 token 用量折算成钱，记进当天的日账本。
+// 为什么不用次数：一次多步 ReAct 回答要 2–4 次模型调用，按次数计费会让「问一个问题」就撞上限；
+// 按钱计费才真正对应「花多少」，也不用给用户解释「分钟桶」。
+// KV 的 get/put 没有原子自增：并发下计数是「近似」的，属于可接受的误差（最多多花一次请求的钱）。
 
 export interface Limits {
-  perMinute: number;
-  perDay: number;
-  globalPerDay: number;
+  /** 每天最多花多少钱（人民币）。 */
+  dailyBudgetYuan: number;
+  /** 每百万输入 token 的价格（人民币，默认按 deepseek-chat cache-miss 价格）。 */
+  priceInPerM: number;
+  /** 每百万输出 token 的价格（人民币）。 */
+  priceOutPerM: number;
+  /** 单次输出的 token 上限（这是请求参数，不是额度）。 */
   maxOutputTokens: number;
+  /** 单条输入的字符上限（防超长，不是额度）。 */
   maxInputChars: number;
   maxMessages: number;
   maxTotalChars: number;
 }
 
 export const DEFAULT_LIMITS: Limits = {
-  perMinute: 3,
-  perDay: 60,
-  globalPerDay: 200,
+  dailyBudgetYuan: 5,
+  priceInPerM: 2,
+  priceOutPerM: 8,
   maxOutputTokens: 512,
   maxInputChars: 6000,
   maxMessages: 12,
@@ -31,9 +30,6 @@ export const DEFAULT_LIMITS: Limits = {
 };
 
 export type Scope = 'c' | 'a';
-
-/** aux 通道（embedding / rerank）的额度放宽倍数：它们极便宜，只防脚本刷，不与用户提问抢额度。 */
-export const AUX_FACTOR = 6;
 
 export interface KVLike {
   get(key: string): Promise<string | null>;
@@ -46,51 +42,40 @@ export function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
-export function minuteBucket(now: number): string {
-  return String(Math.floor(now / MINUTE_MS));
+export function ledgerKey(now: number, scope: Scope = 'c'): string {
+  return 'L:' + scope + ':' + utcDay(now);
 }
 
-// 分钟计数不再是独立的键：它作为 { b: 桶, n: 次数 } 存进日账本的 min 字段，见下面 Ledger。
 /**
- * 日账本：把「当日 per-IP 计数 + 全局当日计数 + 当前分钟桶计数 + usage 账目」合并进**一个**键。
- * 为什么要合并：Cloudflare KV 免费档每天 1000 次写。旧实现一次成功 chat 要写 6 个键
- * （minute/day/global + u:/p:/t:）⇒ 真实天花板约 166 次/天，比站点宣传的 200 次全局闸门还低一截；
- * 一个 RAG 提问还要再叠 embedding + rerank 两次 aux 计数，写次数会更早撞墙。
- * 现在：一次成功 chat = 2 写（占用额度 1 写 + 记账 1 写），一次 aux 调用 = 1 写 ⇒ 天花板重新由闸门决定。
- * 代价：所有计数都变成「读—改—写」同一个键，并发下更接近「近似计数」（KV 本来就没有原子自增，见文件头说明）。
+ * 日账本：一个键装下当天的调用次数、token 账目与花费。
+ * chat 与 embedding/rerank 分作用域（'c' / 'a'），但两边共用同一个 ¥5 预算吗？——不：
+ * 预算只对 chat 生效（aux 是检索/精排，成本可忽略），所以 aux 的 consume 只看 'a' 账本的花费，
+ * 而 'a' 的花费由 price=0 折算，等于不限；这样一次 RAG 提问不会因为 embedding 把预算吃光。
  */
 export interface Ledger {
-  /** 当日全局成功调用数（本 scope）。 */
+  /** 当天调用次数（展示用）。 */
   n: number;
-  /** 当日 per-IP 成功调用数。 */
+  /** 当天累计花费（人民币，保留 6 位）。 */
+  cost: number;
+  /** 各 IP 的调用次数（仅展示）。 */
   ips: Record<string, number>;
-  /** per-IP 的当前分钟桶计数：{ b: 分钟桶, n: 次数 }；桶不匹配即视为 0（旧桶条目写回时顺手清掉，值不会无限长大）。 */
-  min: Record<string, { b: string; n: number }>;
-  /** 当前进行中的那一轮问答（x-llm-turn）：同 turn 的后续步骤不再扣额度。 */
-  turn?: TurnMark;
-  /** usage 账目（只有 chat 记账）：成功调用次数与 token 数。 */
+  /** usage 账目：调用次数与 token 数。 */
   calls: number;
   prompt: number;
   completion: number;
 }
 
-/** 一轮问答的标记：id + 这轮已用的步数 + 最近一次调用时间（毫秒）。 */
-export interface TurnMark { id: string; n: number; t: number }
-
-/** 同一轮的有效期与步数上限：超过任一条件就重新按正常额度计。 */
-export const TURN_TTL_MS = 120000;
-export const TURN_MAX_STEPS = 8;
-
-export function ledgerKey(now: number, scope: Scope = 'c'): string {
-  return 'L:' + scope + ':' + utcDay(now);
-}
-
 function emptyLedger(): Ledger {
-  return { n: 0, ips: {}, min: {}, calls: 0, prompt: 0, completion: 0 };
+  return { n: 0, cost: 0, ips: {}, calls: 0, prompt: 0, completion: 0 };
 }
 
 function safeCount(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+function safeMoney(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 1e6) / 1e6 : 0;
 }
 
 async function readLedger(kv: KVLike, now: number, scope: Scope = 'c'): Promise<Ledger> {
@@ -105,18 +90,10 @@ async function readLedger(kv: KVLike, now: number, scope: Scope = 'c'): Promise<
         if (c > 0) ips[k] = c;
       }
     }
-    const min: Record<string, { b: string; n: number }> = {};
-    if (j.min && typeof j.min === 'object') {
-      for (const [k, v] of Object.entries(j.min)) {
-        const e = v as { b?: unknown; n?: unknown };
-        if (typeof e.b === 'string') min[k] = { b: e.b, n: safeCount(e.n) };
-      }
-    }
-    const rawTurn = j.turn as { id?: unknown; n?: unknown; t?: unknown } | undefined;
-    const turn = rawTurn && typeof rawTurn.id === 'string' && rawTurn.id
-      ? { id: rawTurn.id, n: safeCount(rawTurn.n), t: safeCount(rawTurn.t) }
-      : undefined;
-    return { n: safeCount(j.n), ips, min, turn, calls: safeCount(j.calls), prompt: safeCount(j.prompt), completion: safeCount(j.completion) };
+    return {
+      n: safeCount(j.n), cost: safeMoney(j.cost), ips,
+      calls: safeCount(j.calls), prompt: safeCount(j.prompt), completion: safeCount(j.completion),
+    };
   } catch {
     return emptyLedger();
   }
@@ -126,30 +103,34 @@ async function writeLedger(kv: KVLike, now: number, scope: Scope, l: Ledger): Pr
   await kv.put(ledgerKey(now, scope), JSON.stringify(l), { expirationTtl: 172800 });
 }
 
-/** aux 通道用的放宽版额度（数值仍然是同一份 Limits 派生的，改 LIMITS_JSON 会同时影响两个作用域）。 */
-export function auxLimits(limits: Limits): Limits {
+/** 把 token 用量折算成人民币。 */
+export function costOf(promptTokens: number, completionTokens: number, limits: Limits): number {
+  const p = Math.max(0, promptTokens) * limits.priceInPerM / 1e6;
+  const c = Math.max(0, completionTokens) * limits.priceOutPerM / 1e6;
+  return Math.round((p + c) * 1e6) / 1e6;
+}
+
+export interface Budget {
+  limitYuan: number;
+  spentYuan: number;
+  remainingYuan: number;
+}
+
+export function budgetOf(ledger: Ledger, limits: Limits): Budget {
+  const spent = Math.round(Math.min(ledger.cost, limits.dailyBudgetYuan) * 1e6) / 1e6;
   return {
-    ...limits,
-    perMinute: limits.perMinute * AUX_FACTOR,
-    perDay: limits.perDay * AUX_FACTOR,
-    globalPerDay: limits.globalPerDay * AUX_FACTOR,
+    limitYuan: limits.dailyBudgetYuan,
+    spentYuan: spent,
+    remainingYuan: Math.max(0, Math.round((limits.dailyBudgetYuan - ledger.cost) * 1e6) / 1e6),
   };
 }
 
-export interface Counters {
-  minute: number;
-  day: number;
-  global: number;
-}
-
-export type LimitCode = 'per-minute' | 'per-ip-day' | 'global-day';
-
 export interface Decision {
   ok: boolean;
-  code?: LimitCode;
+  code?: 'budget-day';
   message: string;
   retryAfterMs: number;
-  counters: Counters;
+  budget: Budget;
 }
 
 export function msUntilUtcMidnight(now: number): number {
@@ -157,88 +138,30 @@ export function msUntilUtcMidnight(now: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - now;
 }
 
-/** 三个计数（分钟 / 当日 per-IP / 当日全局）都从同一个日账本里读出来：1 次 get。 */
-async function readState(kv: KVLike, ip: string, now: number, scope: Scope): Promise<{ counters: Counters; ledger: Ledger }> {
+export async function peek(kv: KVLike, _ip: string, now: number, scope: Scope = 'c', limits: Limits = DEFAULT_LIMITS): Promise<Budget> {
+  return budgetOf(await readLedger(kv, now, scope), limits);
+}
+
+/** 判定并登记一次调用：只看「今天还剩多少钱」。 */
+export async function consume(kv: KVLike, ip: string, limits: Limits, now: number, scope: Scope = 'c'): Promise<Decision> {
   const ledger = await readLedger(kv, now, scope);
-  const slot = ledger.min[ip];
-  const bucket = minuteBucket(now);
-  const counters: Counters = {
-    minute: slot && slot.b === bucket ? slot.n : 0,
-    day: ledger.ips[ip] || 0,
-    global: ledger.n,
-  };
-  return { counters, ledger };
-}
-
-export async function peek(kv: KVLike, ip: string, now: number, scope: Scope = 'c'): Promise<Counters> {
-  return (await readState(kv, ip, now, scope)).counters;
-}
-
-/** 纯函数判据：给定计数器决定放行还是拒绝（单测直接打这里）。 */
-export function verdict(c: Counters, limits: Limits, now: number): Decision {
-  const counters: Counters = { minute: c.minute, day: c.day, global: c.global };
-  if (c.global >= limits.globalPerDay) {
+  const budget = budgetOf(ledger, limits);
+  if (ledger.cost >= limits.dailyBudgetYuan) {
     return {
       ok: false,
-      code: 'global-day',
-      message: '站内代理今天的全局预算已用完（' + limits.globalPerDay + ' 次/天）。填入你自己的 API key 可以继续使用。',
+      code: 'budget-day',
+      message: '今天的站内预算（¥' + limits.dailyBudgetYuan + '）已用完，明天 08:00（北京时间）恢复；想现在继续就填自己的 API key。',
       retryAfterMs: msUntilUtcMidnight(now),
-      counters,
+      budget,
     };
   }
-  if (c.day >= limits.perDay) {
-    return {
-      ok: false,
-      code: 'per-ip-day',
-      message: '你今天的站内额度已用完（每 IP ' + limits.perDay + ' 次/天）。填入你自己的 API key 可以继续使用。',
-      retryAfterMs: msUntilUtcMidnight(now),
-      counters,
-    };
-  }
-  if (c.minute >= limits.perMinute) {
-    const wait = MINUTE_MS - (now % MINUTE_MS);
-    return {
-      ok: false,
-      code: 'per-minute',
-      message: '请求过于频繁：站内代理每分钟 ' + limits.perMinute + ' 次，请约 ' + Math.ceil(wait / 1000) + ' 秒后再试，或填入自己的 key。',
-      retryAfterMs: wait,
-      counters,
-    };
-  }
-  return { ok: true, message: 'ok', retryAfterMs: 0, counters };
-}
-
-/** 判定并占用一次额度（拒绝时不占用）。 */
-/** 判定并占用一次额度（拒绝时不占用）：**只写一个键**（日账本），省 KV 写次数。 */
-export async function consume(kv: KVLike, ip: string, limits: Limits, now: number, scope: Scope = 'c', turnId = ''): Promise<Decision> {
-  const { counters, ledger } = await readState(kv, ip, now, scope);
-  // 同一轮问答的后续步骤：不重复扣额度（否则一次 2–4 步的 ReAct 回答就吃光整分钟额度）。
-  const mark = ledger.turn;
-  const continuation = !!turnId && !!mark && mark.id === turnId && now - mark.t < TURN_TTL_MS && mark.n < TURN_MAX_STEPS;
-  const d = continuation ? { ok: true, message: 'ok', retryAfterMs: 0, counters } : verdict(counters, limits, now);
-  if (!d.ok) return d;
-  const next: Counters = continuation
-    ? counters
-    : { minute: counters.minute + 1, day: counters.day + 1, global: counters.global + 1 };
-  const nextTurn: TurnMark | undefined = turnId
-    ? { id: turnId, n: continuation ? (mark as TurnMark).n + 1 : 1, t: now }
-    : mark;
-  const bucket = minuteBucket(now);
-  // 顺手清掉别的分钟桶（它们已经不参与判定），账本体积只跟「当分钟活跃 IP 数」有关
-  const min: Record<string, { b: string; n: number }> = { [ip]: { b: bucket, n: next.minute } };
-  for (const [key, slot] of Object.entries(ledger.min)) {
-    if (key !== ip && slot.b === bucket) min[key] = slot;
-  }
-  const nextLedger: Ledger = {
+  const next: Ledger = {
     ...ledger,
-    n: next.global,
-    ips: next.day === counters.day ? ledger.ips : { ...ledger.ips, [ip]: next.day },
-    min,
-    turn: nextTurn,
+    n: ledger.n + 1,
+    ips: { ...ledger.ips, [ip]: (ledger.ips[ip] || 0) + 1 },
   };
-  await writeLedger(kv, now, scope, nextLedger);
-  d.counters = next;
-  return d;
+  await writeLedger(kv, now, scope, next);
+  return { ok: true, message: 'ok', retryAfterMs: 0, budget: budgetOf(next, limits) };
 }
 
 export interface UsageTotals {
@@ -252,12 +175,13 @@ export async function readUsage(kv: KVLike, now: number, scope: Scope = 'c'): Pr
   return { calls: l.calls, promptTokens: l.prompt, completionTokens: l.completion };
 }
 
-/** 记一次真实上游调用的 token 用量（记账，不影响放行判定）。 */
+/** 记一次真实上游调用的 token 用量与花费（记账，不影响放行判定）。 */
 export async function addUsage(
   kv: KVLike,
   u: { promptTokens: number; completionTokens: number },
   now: number,
   scope: Scope = 'c',
+  limits: Limits = DEFAULT_LIMITS,
 ): Promise<void> {
   const l = await readLedger(kv, now, scope);
   await writeLedger(kv, now, scope, {
@@ -265,19 +189,32 @@ export async function addUsage(
     calls: l.calls + 1,
     prompt: l.prompt + safeCount(u.promptTokens),
     completion: l.completion + safeCount(u.completionTokens),
+    cost: Math.round((l.cost + costOf(u.promptTokens, u.completionTokens, limits)) * 1e6) / 1e6,
   });
+}
+
+/** aux（embedding / rerank）不再单独设额度：它们的价格按 0 计，不受 ¥5 预算影响。 */
+export function auxLimits(limits: Limits): Limits {
+  return { ...limits, priceInPerM: 0, priceOutPerM: 0 };
 }
 
 export function limitsFrom(raw: string | undefined): Limits {
   if (!raw) return DEFAULT_LIMITS;
   try {
     const j = JSON.parse(raw) as Partial<Limits>;
-    const out: Limits = { ...DEFAULT_LIMITS };
-    for (const k of Object.keys(DEFAULT_LIMITS) as (keyof Limits)[]) {
-      const v = j[k];
-      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[k] = Math.floor(v);
-    }
-    return out;
+    const num = (v: unknown, d: number) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : d;
+    };
+    return {
+      dailyBudgetYuan: num(j.dailyBudgetYuan, DEFAULT_LIMITS.dailyBudgetYuan),
+      priceInPerM: num(j.priceInPerM, DEFAULT_LIMITS.priceInPerM),
+      priceOutPerM: num(j.priceOutPerM, DEFAULT_LIMITS.priceOutPerM),
+      maxOutputTokens: num(j.maxOutputTokens, DEFAULT_LIMITS.maxOutputTokens),
+      maxInputChars: num(j.maxInputChars, DEFAULT_LIMITS.maxInputChars),
+      maxMessages: num(j.maxMessages, DEFAULT_LIMITS.maxMessages),
+      maxTotalChars: num(j.maxTotalChars, DEFAULT_LIMITS.maxTotalChars),
+    };
   } catch {
     return DEFAULT_LIMITS;
   }

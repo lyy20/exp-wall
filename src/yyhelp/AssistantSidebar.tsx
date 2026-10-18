@@ -105,8 +105,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     setTurns((prev) => [...prev, { id, q, steps: [], answer: '', mode: llm.live ? 'live' : 'rule', running: true }]);
     setTemplates(buildTemplates(user.phone));
     const userId = user.id;
-    // 一轮一个 turn id：这一轮里的多次模型调用在服务端只扣一次额度。
-    const turnId = 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
     const runtimeAssets = { ...assets, orders: mergeOrders(assets.orders) };
     const d = decide(q, runtimeAssets.intents, { hasLlm: llm.live });
     const rt = new ToolRuntime(runtimeAssets, 'thread_' + Date.now().toString(36));
@@ -134,7 +133,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
       let authFailedNo = '';
       for (let step = 1; step <= maxSteps; step++) {
         let acc = '';
-        const res = await chatStream(history, { temperature: 0.1, maxTokens: 400, signal: ctrl.signal, turnId, onToken: (c) => { acc += c; } });
+        const res = await chatStream(history, { temperature: 0.1, maxTokens: 400, signal: ctrl.signal, onToken: (c) => { acc += c; } });
         const text = (res.text || acc).trim();
         history.push({ role: 'assistant', content: text });
         const m = /\{[\s\S]*\}/.exec(text);

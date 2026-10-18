@@ -10,6 +10,7 @@ import {
   limitsFrom,
   peek,
   readUsage,
+  type Budget,
   type KVLike,
   type Limits,
 } from './limits.ts';
@@ -110,6 +111,7 @@ function accountUsage(
   env: Env,
   ctx: Ctx,
   now: number,
+  limits: Limits,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
@@ -138,32 +140,33 @@ function accountUsage(
     },
     flush() {
       if (env.RATE_KV && (usage.promptTokens || usage.completionTokens)) {
-        ctx.waitUntil(addUsage(env.RATE_KV, usage, now));
+        ctx.waitUntil(addUsage(env.RATE_KV, usage, now, 'c', limits));
       }
     },
   });
   return body.pipeThrough(transform);
 }
 
-function sseHeaders(origin: string, remaining: { minute: number; day: number; global: number }): Record<string, string> {
+function sseHeaders(origin: string, budget: Budget): Record<string, string> {
   return Object.assign(
     {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Accel-Buffering': 'no',
-      'X-Proxy-Remaining-Minute': String(Math.max(0, remaining.minute)),
-      'X-Proxy-Remaining-Day': String(Math.max(0, remaining.day)),
-      'X-Proxy-Remaining-Global': String(Math.max(0, remaining.global)),
+      // 额度口径是钱：前端只需拿这三个头就能显示「今日已用 / 上限」。
+      'X-Proxy-Budget-Yuan': String(budget.limitYuan),
+      'X-Proxy-Spent-Yuan': String(budget.spentYuan),
+      'X-Proxy-Remaining-Yuan': String(budget.remainingYuan),
     },
     corsHeaders(origin),
   );
 }
 
-function remainingOf(limits: Limits, counters: { minute: number; day: number; global: number }) {
+function budgetHeaders(budget: Budget): Record<string, string> {
   return {
-    minute: Math.max(0, limits.perMinute - counters.minute),
-    day: Math.max(0, limits.perDay - counters.day),
-    global: Math.max(0, limits.globalPerDay - counters.global),
+    'X-Proxy-Budget-Yuan': String(budget.limitYuan),
+    'X-Proxy-Spent-Yuan': String(budget.spentYuan),
+    'X-Proxy-Remaining-Yuan': String(budget.remainingYuan),
   };
 }
 
@@ -171,15 +174,9 @@ function remainingOf(limits: Limits, counters: { minute: number; day: number; gl
  * embedding / rerank 走的是 aux 额度（不与用户提问抢额度），但响应头依然报 **chat 那份** 剩余额度：
  * 前端只认这一份额度，否则一次提问里的三个请求会互相把界面上的数字改乱。
  */
-async function chatRemainingHeaders(env: Env, limits: Limits, ip: string, now: number): Promise<Record<string, string>> {
+async function chatBudgetHeaders(env: Env, limits: Limits, ip: string, now: number): Promise<Record<string, string>> {
   if (!env.RATE_KV) return {};
-  const counters = await peek(env.RATE_KV, ip, now, 'c');
-  const r = remainingOf(limits, counters);
-  return {
-    'X-Proxy-Remaining-Minute': String(r.minute),
-    'X-Proxy-Remaining-Day': String(r.day),
-    'X-Proxy-Remaining-Global': String(r.global),
-  };
+  return budgetHeaders(await peek(env.RATE_KV, ip, now, 'c', limits));
 }
 
 async function handleStatus(env: Env, origin: string, limits: Limits, ip: string, now: number): Promise<Response> {
@@ -191,8 +188,8 @@ async function handleStatus(env: Env, origin: string, limits: Limits, ip: string
   if (!env.DEEPSEEK_API_KEY) {
     return fail(503, 'config-missing-key', '服务端没有配置 DEEPSEEK_API_KEY。', origin);
   }
-  // /status 报的是 chat 那份「用户可见」的额度（aux 通道另算一份，见 limits.ts 的说明）
-  const counters = await peek(kv, ip, now, 'c');
+  // /status 报的是 chat 那份「用户可见」的预算
+  const budget = await peek(kv, ip, now, 'c', limits);
   const usage = await readUsage(kv, now);
   return jsonResponse(
     {
@@ -204,8 +201,7 @@ async function handleStatus(env: Env, origin: string, limits: Limits, ip: string
       rerankModels: rerankModelsOf(env),
       backends: backendsOf(env),
       limits,
-      counters,
-      remaining: remainingOf(limits, counters),
+      budget,
       usage,
       serverTime: new Date(now).toISOString(),
       note: '服务端 key + 每 IP 限流 + 每日预算闸门；超限会明确返回 429，前端会回落到回放或提示填自己的 key。',
@@ -222,14 +218,12 @@ async function handleChat(req: Request, env: Env, ctx: Ctx, origin: string, limi
   if (!env.RATE_KV) return fail(503, 'config-missing-kv', '服务端没有绑定 RATE_KV。', origin);
   if (!env.DEEPSEEK_API_KEY) return fail(503, 'config-missing-key', '服务端没有配置 DEEPSEEK_API_KEY。', origin);
 
-  // 一轮问答里可能有 2–4 次模型调用（ReAct 每步一次）：带上同一个 turn id，只扣一次额度。
-  const rawTurn = (req.headers.get('x-llm-turn') || '').trim();
-  const turnId = /^[A-Za-z0-9_-]{4,48}$/.test(rawTurn) ? rawTurn : '';
-  const decision = await consume(env.RATE_KV, ip, limits, now, 'c', turnId);
+  // 额度只有「今天还剩多少钱」这一条：不再按次/按分钟限制，也不再需要 turn id。
+  const decision = await consume(env.RATE_KV, ip, limits, now, 'c');
   if (!decision.ok) {
     return fail(429, decision.code || 'rate-limited', decision.message, origin, {
       retryAfterMs: decision.retryAfterMs,
-      counters: decision.counters,
+      budget: decision.budget,
     });
   }
 
@@ -266,9 +260,9 @@ async function handleChat(req: Request, env: Env, ctx: Ctx, origin: string, limi
     );
   }
 
-  return new Response(accountUsage(upstream.body, env, ctx, now), {
+  return new Response(accountUsage(upstream.body, env, ctx, now, limits), {
     status: 200,
-    headers: sseHeaders(origin, remainingOf(limits, decision.counters)),
+    headers: sseHeaders(origin, decision.budget),
   });
 }
 
@@ -316,12 +310,12 @@ async function handleEmbeddings(req: Request, env: Env, origin: string, limits: 
   if (!wantAi && !env.SILICONFLOW_API_KEY) {
     return fail(503, 'config-missing-key', '服务端没有配置 SILICONFLOW_API_KEY；可以改用 @cf/ 开头的 Workers AI 模型。', origin);
   }
-  // aux 额度：一次提问要发 embedding + rerank + chat 三个请求，若共用一份计数，用户问一句就吃光整分钟额度
+  // aux 通道：价格按 0 计，不占 ¥5 预算（一次提问要发 embedding + rerank + chat 三个请求）
   const decision = await consume(env.RATE_KV, ip, auxLimits(limits), now, 'a');
   if (!decision.ok) {
-    return fail(429, decision.code || 'rate-limited', decision.message, origin, { retryAfterMs: decision.retryAfterMs, counters: decision.counters });
+    return fail(429, decision.code || 'rate-limited', decision.message, origin, { retryAfterMs: decision.retryAfterMs, budget: decision.budget });
   }
-  const chatHeaders = await chatRemainingHeaders(env, limits, ip, now);
+  const chatHeaders = await chatBudgetHeaders(env, limits, ip, now);
   const okHeaders = Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, chatHeaders, corsHeaders(origin));
 
   if (wantAi) {
@@ -372,9 +366,9 @@ async function handleRerank(req: Request, env: Env, origin: string, limits: Limi
   }
   const decision = await consume(env.RATE_KV, ip, auxLimits(limits), now, 'a');
   if (!decision.ok) {
-    return fail(429, decision.code || 'rate-limited', decision.message, origin, { retryAfterMs: decision.retryAfterMs, counters: decision.counters });
+    return fail(429, decision.code || 'rate-limited', decision.message, origin, { retryAfterMs: decision.retryAfterMs, budget: decision.budget });
   }
-  const chatHeaders = await chatRemainingHeaders(env, limits, ip, now);
+  const chatHeaders = await chatBudgetHeaders(env, limits, ip, now);
   const okHeaders = Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, chatHeaders, corsHeaders(origin));
 
   if (wantAi) {

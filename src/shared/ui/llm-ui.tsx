@@ -64,27 +64,14 @@ export function QuotaBar({ mode }: { mode?: LlmMode }) {
   return (
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 11, color: 'var(--fg-faint)' }}>
       <span>
-        限流：本分钟剩 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{snap.minuteLeft}</b>/{snap.minuteTotal} 次 ·
-        本次会话已用 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{snap.quota.live}</b>/{snap.limits.perSession} 次 ·
-        单次输出上限 {snap.limits.maxOutputTokens} token
+        本地防护：单次输出 {snap.limits.maxOutputTokens} token · 输入 ≤{snap.limits.maxInputChars} 字符 · 不限问答次数
       </span>
-      {mode === 'proxy' && proxy && (
+      {mode === 'proxy' && proxy && proxy.budget && (
         <span>
-          站内额度：本分钟剩 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{proxy.remaining.minute}</b>/{proxy.limits.perMinute} 次 ·
-          今日剩 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{proxy.remaining.day}</b>/{proxy.limits.perDay} 次 ·
-          全站今日剩 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>{proxy.remaining.global}</b>/{proxy.limits.globalPerDay} 次
+          站内预算：今天已用 <b className="dp-mono" style={{ color: 'var(--fg-dim)' }}>¥{proxy.budget.spentYuan.toFixed(3)}</b> · 上限 ¥{proxy.budget.limitYuan}
+          （还剩 ¥{proxy.budget.remainingYuan.toFixed(3)}，只按 token 花费限制，不限问答次数）
         </span>
       )}
-      <button
-        type="button"
-        className="dp-btn"
-        style={{ fontSize: 10, padding: '2px 8px' }}
-        onClick={() => {
-          limiter.resetQuota();
-        }}
-      >
-        重置计数
-      </button>
     </div>
   );
 }
@@ -176,10 +163,10 @@ export function KeyBar({ llm, note }: { llm: LlmController; note?: string }) {
           站内代理已就绪：模型 {proxy.models.join(' / ')}；embedding {proxy.embedModels.length ? proxy.embedModels.join(' / ') : '未配置'}。
         </p>
       )}
-      {!llm.proxyChecking && proxy && llm.mode === 'proxy' && (proxy.remaining.minute === 0 || proxy.remaining.day === 0 || proxy.remaining.global === 0) && (
+      {!llm.proxyChecking && proxy && llm.mode === 'proxy' && proxy.budget && proxy.budget.remainingYuan <= 0 && (
         <p style={{ margin: '6px 0 0', fontSize: 11, color: 'var(--warn)' }}>
-          站内额度已用完（{proxy.remaining.minute === 0 ? '本分钟' : proxy.remaining.day === 0 ? '今日' : '全站今日'}）：下一次提问会被服务端明确拒绝（429）
-          —— 填自己的 key 可以继续用，不受这份额度限制。
+          今天的站内预算（¥{proxy.budget.limitYuan}）已用完：下一次提问会被服务端明确拒绝（429），明天 08:00（北京时间）恢复
+          —— 填自己的 key 可以继续用，不受这份预算限制。
         </p>
       )}
       {provider && !provider.corsVerified && (

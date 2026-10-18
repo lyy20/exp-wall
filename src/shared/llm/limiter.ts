@@ -1,9 +1,9 @@
 /**
  * 客户端限流 / 预算护栏。
  *
- * 用户要求「给 API 用量加一定的限流」，这里做三层：
- *   1) 滑动窗口：每分钟最多 6 次真实请求；
- *   2) 会话总额：单次页面生命周期最多 60 次（sessionStorage 记账，刷新不清零）；
+ * 额度口径已改成「服务端每天 ¥5 预算」，所以本地不再限制问答次数：
+ *   1) 只剩防跑飞的护栏（每分钟 600 次 —— 正常交互永远到不了）；
+ *   2) 会话总额放到 100000（等于不限）；
  *   3) 单次上限：输出 token ≤ 512，输入字符 ≤ 6000，并发强制为 1。
  * 回放（replay）不占真实额度，单独计数。
  * 任何一层触发都会给出明确的中文提示，而不是静默失败。
@@ -18,8 +18,8 @@ export interface LimitConfig {
 }
 
 export const DEFAULT_LIMITS: LimitConfig = {
-  perMinute: 6,
-  perSession: 60,
+  perMinute: 600,
+  perSession: 100000,
   maxOutputTokens: 512,
   maxInputChars: 6000,
   concurrency: 1,

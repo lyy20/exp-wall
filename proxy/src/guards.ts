@@ -44,14 +44,13 @@ export function originAllowed(origin: string | null, allowed: string[]): boolean
  * 用户问完一句看到额度没掉（本地 harness 是在 Node 里跑的，不受 CORS 限制，所以测不出来，
  * 这条是浏览器验收 ui-accept.mjs 抓出来的）。
  */
-export const EXPOSED_HEADERS = 'X-Proxy-Remaining-Minute, X-Proxy-Remaining-Day, X-Proxy-Remaining-Global';
+export const EXPOSED_HEADERS = 'X-Proxy-Budget-Yuan, X-Proxy-Spent-Yuan, X-Proxy-Remaining-Yuan';
 
 export function corsHeaders(origin: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    // x-llm-turn：同一轮问答的后续模型调用带着同一个 turn id，服务端据此只扣一次额度。
-    'Access-Control-Allow-Headers': 'Content-Type, x-llm-turn',
+    'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Expose-Headers': EXPOSED_HEADERS,
     'Access-Control-Max-Age': '3600',
     Vary: 'Origin',
