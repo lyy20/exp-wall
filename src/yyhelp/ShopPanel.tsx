@@ -220,7 +220,7 @@ export function ShopPanel({ session, onLogout }: { session: Session; onLogout: (
             <div key={o.order_no} className="dp-panel-tight" style={{ padding: 14, display: 'grid', gap: 8, minWidth: 0 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span className="dp-mono" style={{ fontSize: 13, color: 'var(--fg)' }}>订单 {o.order_no}</span>
-                <Badge tone={o.status === 'refund_pending' ? 'warn' : 'live'}>{o.status_cn}</Badge>
+                <Badge tone={o.status === 'refund_pending' ? 'warn' : o.status === 'refunded' ? 'neutral' : 'live'}>{o.status_cn}</Badge>
                 <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{shortTime(o.created_at)} · 运单 {o.tracking_no}</span>
                 <span style={{ flex: 1 }} />
                 <span className="dp-mono" style={{ fontSize: 13 }}>{money(o.total_amount)}</span>
@@ -229,6 +229,8 @@ export function ShopPanel({ session, onLogout }: { session: Session; onLogout: (
               <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.7, overflowWrap: 'anywhere' }}>
                 收货：{o.receiver} · {o.phone}<br />地址：{o.address}{o.note ? '（备注：' + o.note + '）' : ''}
               </div>
+              {o.refund_status === 'approved' && <div style={{ fontSize: 11.5, color: 'var(--live)' }}>退款已通过，¥{o.total_amount} 原路退回（演示环境不涉及真实资金）。</div>}
+              {o.refund_status === 'rejected' && <div style={{ fontSize: 11.5, color: 'var(--warn)' }}>退款被驳回{o.refund_note ? '：' + o.refund_note : ''}。</div>}
               {editAddr && editAddr.no === o.order_no && (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <input className="dp-input" style={{ flex: '1 1 220px' }} value={editAddr.value} onChange={(e) => setEditAddr({ no: o.order_no, value: e.target.value })} />

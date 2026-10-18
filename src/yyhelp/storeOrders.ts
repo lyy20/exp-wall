@@ -12,7 +12,10 @@ export interface ShopOrder extends YyOrder {
   phone?: string;
   address?: string;
   note?: string;
-  refund_status?: 'none' | 'requested';
+  /** none=没申请 · requested=用户已申请待审核 · approved=审核通过（已退款） · rejected=审核驳回 */
+  refund_status?: 'none' | 'requested' | 'approved' | 'rejected';
+  /** 驳回原因（管理员填写，用户侧可见） */
+  refund_note?: string;
   user_phone?: string;
 }
 

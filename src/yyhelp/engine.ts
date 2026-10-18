@@ -7,6 +7,8 @@ export const STATUS_CN: Record<string, string> = {
   created: '已创建', paid: '已付款', shipped: '已发货', signed: '已签收', closed: '已关闭',
   // 商城页的「申请退款」会把订单改成这个状态（项目 fixture 里没有，但字段语义一致）
   refund_pending: '退款审核中',
+  // 后台审核通过后的终态
+  refunded: '已退款',
 };
 const KEYWORDS = ['运费', '退款', '退货', '包邮', '时效', '无理由'];
 const RETRYABLE: Record<string, boolean> = {
