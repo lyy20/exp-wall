@@ -250,7 +250,7 @@ export class ToolRuntime {
   /** 提交退款（写操作，必须确认后才改状态）。 */
   private doApplyRefund(order_no: string, reason: string, confirmed: boolean) {
     const o = this.findOrder(order_no);
-    if (!o.refundable) throw new ToolError('POLICY_BLOCKED', '订单 ' + o.order_no + ' 不满足退款条件');
+    if (!o.refundable) throw new ToolError('POLICY_BLOCKED', '订单 ' + o.order_no + ' 不满足退款条件（已超过 7 天无理由期）', '如属质量问题，可走质量售后工单');
     const why = String(reason ?? '').trim() || '用户申请退款';
     if (!confirmed) {
       return {

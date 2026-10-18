@@ -25,8 +25,10 @@ export const DEFAULT_LIMITS: Limits = {
   priceOutPerM: 8,
   maxOutputTokens: 512,
   maxInputChars: 6000,
-  maxMessages: 12,
-  maxTotalChars: 12000,
+  // 多步 ReAct 一轮会有 2–4 次调用，每次都要带上历史 + 工具返回，12 条/12k 字符会很快撞顶；
+  // 输入按 token 计价且很便宜，这里放到 30 条 / 30k 字符，仍然防超长。
+  maxMessages: 30,
+  maxTotalChars: 30000,
 };
 
 export type Scope = 'c' | 'a';

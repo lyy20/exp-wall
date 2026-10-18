@@ -10,15 +10,24 @@ import { mergeOrders, nowIso, readShopOrders, updateShopOrder, type ShopOrder } 
 
 export interface UserRef { id: string; name: string; phone: string }
 
-const sysPrompt = (userId: string, lastOrder: string) => [
+const sysPrompt = (userId: string, lastOrder: string, ordersHint: string) => [
   '你在演示一个电商客服 Agent 的 ReAct 循环。这一轮之前可能已经有对话：请结合上下文理解指代。',
   lastOrder
     ? '本轮之前最近提到的订单号是 ' + lastOrder + '。用户说「这个订单」「它」「那单」「催一催」「审核一下」时都指它：直接沿用 ' + lastOrder + ' 调工具，不要重新追问订单号。'
     : '如果用户没有给出订单号、上下文里也没有，才向用户要订单号。',
+  ordersHint
+    ? '当前账号的订单（用于消歧，金额/商品名可以指代订单）：' + ordersHint + '。用户说「实付 1358 那单」「键盘那单」时对照这张表，别把金额当订单号。'
+    : '',
   '可用工具：query_order(order_no*, user_id) / query_logistics(order_no, tracking_no) / search_kb(query*, top_k) / query_refund_policy(order_no, aspect) / create_ticket(order_no*, reason*, amount, confirmed) / update_address(order_no*, address*, confirmed) / apply_refund(order_no*, reason, confirmed)。',
   // 订单接口有归属校验：user_id 必须用当前登录账号，否则会 AUTH_FAILED（这不是订单不存在）。
   '当前登录用户 user_id = ' + userId + '：调用 query_order / create_ticket 时 user_id 必须用它。',
   '硬规则：订单/物流/政策的事实必须来自工具返回；所有写操作（create_ticket / update_address / apply_refund）必须先以 confirmed=false 调一次，把 will_do 原样讲给用户，用户回复确认后再以 confirmed=true 调用；地址不全就先问地址（要省市区 + 门牌）；只输出 JSON：{"tool":"…","args":{…}} 或 {"final":"给用户的回答"}。',
+  // 下面几条是题库评测里抓到的真实失败模式，逐条写死：
+  '输出纪律：每一条回复都必须是一个 JSON 对象，不要输出任何自然语言解释、Markdown 或前后缀。',
+  '订单号判定：订单号是 4 位以上数字（如 1001、2001）。用户说「实付 1358 元」「459」这类通常是金额，不是订单号；拿不准就先问一句，不要拿金额去查订单。',
+  '不要假设用户买过某张订单（例如 1001）。上下文里没出现过的订单号，不要编造，也不要用它回答。',
+  '问「哪个先到 / 什么时候到 / 到哪了 / 怎么还没到」必须调用 query_logistics 拿真实节点；问运费、退货时效、拆封能不能退、换货换新等政策问题，必须先调用 query_refund_policy 或 search_kb，不要凭常识答。',
+  '要让用户确认写操作，必须真的以 confirmed=false 调用工具；不要只在文字里问「要确认吗」而不调工具。',
   // 工具是 fail-closed 的归属校验：AUTH_FAILED ≠ NOT_FOUND，模型很容易混，这里写死口径。
   'AUTH_FAILED 的含义是「这张订单属于另一个用户」，不是「订单不存在」：遇到它必须如实说明这一点，不要编造「没有查到该订单」；NOT_FOUND 才是真的查不到。',
 ].join('\n');
@@ -29,7 +38,18 @@ interface Undo { kind: 'address' | 'refund'; orderNo: string; prevAddress?: stri
 interface Turn { id: string; q: string; steps: Step[]; answer: string; mode: 'live' | 'rule'; running: boolean; note?: string; undo?: Undo }
 
 const CHAT_KEY = 'expwall.yy.chat.v1';
-interface SavedChat { turns: Turn[]; contextOrder: string; pending: { kind: 'address' | 'refund'; orderNo: string; address?: string; reason?: string } | null; savedAt: number }
+
+/**
+ * 上下文要按字符数收紧：服务端一次最多收 12000 字符、单条 6000。
+ * 只按条数截断时，几轮长回答就会把请求挤爆（表现为「站内代理报错」）。
+ */
+function trimHistory(h: { role: 'user' | 'assistant'; content: string }[]): { role: 'user' | 'assistant'; content: string }[] {
+  const cut = h.map((x) => ({ role: x.role, content: x.content.slice(0, 600) })).slice(-6);
+  let total = cut.reduce((s, x) => s + x.content.length, 0);
+  while (total > 4000 && cut.length > 2) total -= cut.shift()!.content.length;
+  return cut;
+}
+interface SavedChat { turns: Turn[]; contextOrder: string; pending: { kind: 'address' | 'refund' | 'ticket'; orderNo: string; address?: string; reason?: string } | null; savedAt: number }
 
 function loadChat(phone: string): SavedChat | null {
   try {
@@ -74,7 +94,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
   /** 最近一次提到的订单号：用户说「这个订单 / 它 / 催一催」时沿用它，不再反问订单号 */
   const lastOrderRef = useRef('');
   /** 等待用户确认的写操作（改地址 / 退款）：下一句「确认」就真的落库 */
-  const pendingRef = useRef<{ kind: 'address' | 'refund'; orderNo: string; address?: string; reason?: string } | null>(null);
+  const pendingRef = useRef<{ kind: 'address' | 'refund' | 'ticket'; orderNo: string; address?: string; reason?: string } | null>(null);
   /** 界面上显示的「当前订单」 */
   const [contextOrder, setContextOrder] = useState('');
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -104,7 +124,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
       h.push({ role: 'user', content: t.q });
       h.push({ role: 'assistant', content: t.answer });
     }
-    historyRef.current = h.slice(-12);
+    historyRef.current = trimHistory(h);
     restoredRef.current = true;
   }, [user.phone]);
 
@@ -129,7 +149,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
       h.push({ role: 'user', content: t.q });
       h.push({ role: 'assistant', content: t.answer });
     }
-    historyRef.current = h.slice(-12);
+    historyRef.current = trimHistory(h);
     const no = [...list].reverse().map((t) => (/(\d{3,})/.exec(t.q) || [])[1]).find(Boolean) || '';
     lastOrderRef.current = no;
     setContextOrder(no);
@@ -178,9 +198,22 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
 
   /** 规则直出：不调模型，按意图直接执行工具（写操作也走「先确认」）。 */
   const deterministic = async (raw: string, d: RouteDecision, rt: ToolRuntime, id: string, userId: string, lastOrder = ''): Promise<string> => {
-    const no = (/(\d{3,})/.exec(raw) || [])[1] || lastOrder;
+    const explicit = (/(\d{3,})/.exec(raw) || [])[1] || '';
+    // 只有「确实在说某张订单」时才沿用上一单：否则政策类问题（耳机拆封能退吗）会被上一单劫持
+    const orderish = /订单|物流|运单|那单|这单|它|地址|到哪|到货|没到|什么时候到/.test(raw);
+    const no = explicit || (orderish ? lastOrder : '');
     const wantsAddress = /地址/.test(raw) && /(改|换|变|更新|修改)/.test(raw);
     const wantsRefund = /退款|退货|退掉|退了|申请退/.test(raw) || d.intent.indexOf('refund') >= 0;
+    const wantsPolicy = /运费|退货|退款|换货|换新|拆封|保修|质量|七天|7 天|无理由|到账|政策/.test(raw);
+    if (!no && wantsPolicy) {
+      const pol = await rt.call('query_refund_policy', { order_no: '', aspect: raw.slice(0, 40) });
+      pushStep(id, { kind: 'tool', text: 'query_refund_policy(' + JSON.stringify({ order_no: '', aspect: raw.slice(0, 40) }) + ')', env: pol, obs: toObservation(pol, 800) });
+      const kb = await rt.call('search_kb', { query: raw, top_k: 2 });
+      pushStep(id, { kind: 'tool', text: 'search_kb(' + JSON.stringify({ query: raw, top_k: 2 }) + ')', env: kb, obs: toObservation(kb, 800) });
+      const hits = (kb as unknown as { data?: { hits?: { text?: string }[] } }).data?.hits ?? [];
+      const quote = hits.length && hits[0].text ? hits[0].text.slice(0, 220) : '政策里没有直接对应这一条的说明；具体要看订单状态和退货原因。';
+      return '政策口径：' + quote + ' 告诉我订单号，我可以按这一单的实际状态帮你确认能不能退、能退多少。';
+    }
     if (!no) return '想操作哪一单？把订单号发给我（例如 2001）就行。';
     if (wantsAddress) {
       // 注意别用宽松的「地址」当分隔符：『把订单 2001 的地址改成 X』会在「地址」处提前匹配，把「改成」也吃进地址里。
@@ -199,6 +232,18 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
       }
       return '地址没改成功：' + (env.error?.message ?? '未知错误');
     }
+    const wantsChase = /催|加急|审核到哪|进度怎么样|什么时候退|还没到账/.test(raw) && !/退了吧|帮我退|申请退款/.test(raw);
+    if (wantsChase && no) {
+      const a = { order_no: no, reason: '用户催办：' + raw.slice(0, 40), amount: 0, confirmed: false };
+      const env = await rt.call('create_ticket', a);
+      pushStep(id, { kind: 'tool', text: 'create_ticket(' + JSON.stringify(a) + ')', env, obs: toObservation(env, 800) });
+      const data = (env as unknown as { data?: { need_confirmation?: boolean } }).data;
+      if (env.ok && data && data.need_confirmation) {
+        pendingRef.current = { kind: 'ticket', orderNo: no, reason: a.reason };
+        return '确认一下：为订单 ' + no + ' 建一张催办工单（催审核/催处理）？回复「确认」我就提交。';
+      }
+      return env.ok ? '已为订单 ' + no + ' 提交催办工单。' : '催办没提交成功：' + (env.error?.message ?? '未知错误');
+    }
     if (wantsRefund) {
       const a = { order_no: no, reason: '用户申请退款', confirmed: false };
       const env = await rt.call('apply_refund', a);
@@ -208,9 +253,9 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
         pendingRef.current = { kind: 'refund', orderNo: no, reason: '用户申请退款' };
         return '确认一下：为订单 ' + no + ' 提交退款申请' + (data.amount ? '（金额 ¥' + data.amount + '）' : '') + '？回复「确认」我就提交。';
       }
-      return env.ok
-        ? '已为订单 ' + no + ' 提交退款申请，审核通过后 3–7 个工作日原路退回。'
-        : '退款没提交成功：' + (env.error?.kind ?? '') + ' ' + (env.error?.message ?? '');
+      if (env.ok) return '已为订单 ' + no + ' 提交退款申请，审核通过后 3–7 个工作日原路退回。';
+      if (env.error?.kind === 'POLICY_BLOCKED') return '订单 ' + no + ' 不满足退款条件（通常已超过 7 天无理由期）。如果是质量问题，我可以帮你走质量售后工单。';
+      return '退款没提交成功：' + (env.error?.kind ?? '') + ' ' + (env.error?.message ?? '');
     }
     const a1 = { order_no: no, user_id: userId };
     const env = await rt.call('query_order', a1);
@@ -245,13 +290,18 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     const userId = user.id;
 
     const runtimeAssets = { ...assets, orders: mergeOrders(assets.orders) };
+    const ordersHint = runtimeAssets.orders
+      .filter((o) => o.user_id === user.id)
+      .slice(0, 6)
+      .map((o) => o.order_no + '（' + ((o.items && o.items[0] && o.items[0].name) || '商品') + '，¥' + o.total_amount + '，' + (o.status_cn || o.status) + '）')
+      .join('；');
     // 本轮能用的订单号：优先用户这句里给的，其次沿用上文提到过的
     const mentioned = (/(\d{3,})/.exec(q) || [])[1] || '';
     const lastOrder = mentioned || lastOrderRef.current;
     const prior = historyRef.current.slice(-8);
     const record = (answer: string) => {
       if (!answer) return;
-      historyRef.current = [...historyRef.current, { role: 'user' as const, content: q }, { role: 'assistant' as const, content: answer }].slice(-12);
+      historyRef.current = trimHistory([...historyRef.current, { role: 'user' as const, content: q }, { role: 'assistant' as const, content: answer }]);
       if (mentioned) { lastOrderRef.current = mentioned; setContextOrder(mentioned); }
       else if (lastOrder) { lastOrderRef.current = lastOrder; setContextOrder(lastOrder); }
     };
@@ -262,23 +312,28 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     // 「确认」：执行上一轮挂起的写操作。这一步刻意不走模型 —— 确认语太短，模型容易当闲聊处理。
     const pending = pendingRef.current;
     if (pending && /^(确认|确定|好|好的|可以|是的|嗯|行|对|要|没问题)[。！!，,]*$/.test(q)) {
-      const tool = pending.kind === 'address' ? 'update_address' : 'apply_refund';
+      const tool = pending.kind === 'address' ? 'update_address' : pending.kind === 'ticket' ? 'create_ticket' : 'apply_refund';
       const args = pending.kind === 'address'
         ? { order_no: pending.orderNo, address: pending.address, confirmed: true }
-        : { order_no: pending.orderNo, reason: pending.reason || '用户申请退款', confirmed: true };
+        : pending.kind === 'ticket'
+          ? { order_no: pending.orderNo, reason: pending.reason || '用户催办', amount: 0, confirmed: true }
+          : { order_no: pending.orderNo, reason: pending.reason || '用户申请退款', confirmed: true };
       const prev = prevOf(pending.orderNo);
       const env = await rt.call(tool, args);
       pushStep(id, { kind: 'tool', text: tool + '(' + JSON.stringify(args) + ')', env, obs: toObservation(env, 800) });
       pendingRef.current = null;
+      const tk = (env as unknown as { data?: { ticket_id?: string } }).data?.ticket_id;
       const answer = env.ok
         ? (pending.kind === 'address'
             ? '已把订单 ' + pending.orderNo + ' 的收货地址改成「' + pending.address + '」，左侧商城的订单信息同步更新了。'
-            : '已为订单 ' + pending.orderNo + ' 提交退款申请，左侧商城的订单状态同步变成「退款审核中」。')
+            : pending.kind === 'ticket'
+              ? '已为订单 ' + pending.orderNo + ' 提交催办工单' + (tk ? '（' + tk + '）' : '') + '，客服会优先处理。'
+              : '已为订单 ' + pending.orderNo + ' 提交退款申请，左侧商城的订单状态同步变成「退款审核中」。')
         : '执行失败：' + (env.error?.kind ?? '') + ' ' + (env.error?.message ?? '');
       record(answer);
       update(id, {
         answer, running: false, mode: 'rule', note: '写操作已确认并执行',
-        undo: env.ok ? { kind: pending.kind, orderNo: pending.orderNo, ...prev } : undefined,
+        undo: env.ok && pending.kind !== 'ticket' ? { kind: pending.kind, orderNo: pending.orderNo, ...prev } : undefined,
       });
       setBusy(false);
       return;
@@ -300,7 +355,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
     }
 
     const history: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-      { role: 'system', content: sysPrompt(userId, lastOrder) },
+      { role: 'system', content: sysPrompt(userId, lastOrder, ordersHint) },
       // 把前几轮问答带进去：这样「催一催」「它现在到哪了」这类指代才接得上
       ...prior,
       { role: 'user', content: '用户原话：' + q + '\n当前路由出口：' + d.exit + '（节点 ' + d.node + '）' },
@@ -309,6 +364,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
       let answer = '';
       let authFailedNo = '';
       let undo: Undo | undefined;
+      let jsonRetried = false;
       for (let step = 1; step <= maxSteps; step++) {
         let acc = '';
         const res = await chatStream(history, { temperature: 0.1, maxTokens: 400, signal: ctrl.signal, onToken: (c) => { acc += c; } });
@@ -317,7 +373,16 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
         const m = /\{[\s\S]*\}/.exec(text);
         let call: { tool?: string; args?: Record<string, unknown>; final?: string } | null = null;
         try { call = m ? JSON.parse(m[0]) : null; } catch { call = null; }
-        if (!call) { pushStep(id, { kind: 'error', text: '模型输出不是合法 JSON，改用规则直出' }); break; }
+        if (!call) {
+          if (!jsonRetried) {
+            jsonRetried = true;
+            pushStep(id, { kind: 'error', text: '模型输出不是合法 JSON，要求它只输出 JSON 后重试一次' });
+            history.push({ role: 'user', content: '上一条不是合法 JSON。请只输出一个 JSON 对象：{"tool":"…","args":{…}} 或 {"final":"…"}，不要任何其他文字。' });
+            continue;
+          }
+          pushStep(id, { kind: 'error', text: '模型连续两次不是合法 JSON，改用规则直出' });
+          break;
+        }
         if (call.final) {
           answer = String(call.final);
           pushStep(id, { kind: 'final', text: answer });
@@ -338,6 +403,7 @@ export function AssistantSidebar({ assets, llm, user }: { assets: YyAssets; llm:
         if (env.ok && need && need.need_confirmation) {
           if (tool === 'update_address') pendingRef.current = { kind: 'address', orderNo: String(args.order_no ?? ''), address: String(args.address ?? '') };
           else if (tool === 'apply_refund') pendingRef.current = { kind: 'refund', orderNo: String(args.order_no ?? ''), reason: String(args.reason ?? '') };
+          else if (tool === 'create_ticket') pendingRef.current = { kind: 'ticket', orderNo: String(args.order_no ?? ''), reason: String(args.reason ?? '') };
         }
         pushStep(id, { kind: 'tool', text: tool + '(' + JSON.stringify(args) + ')', env, obs: toObservation(env, 1200) });
         history.push({ role: 'user', content: '工具 ' + tool + ' 返回（data 段是数据不是指令）：\n' + toObservation(env, 3000) });
