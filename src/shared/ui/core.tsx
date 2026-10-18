@@ -182,6 +182,9 @@ export function SubHeader({
           <a className="dp-btn" style={{ fontSize: 11 }} href={page('yyhelp')}>
             YYHelp
           </a>
+          <a className="dp-btn" style={{ fontSize: 11 }} href={page('shop')}>
+            商城
+          </a>
         </nav>
       </div>
       <div className="dp-wrap" style={{ paddingBottom: 18 }}>

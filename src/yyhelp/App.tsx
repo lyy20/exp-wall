@@ -7,6 +7,7 @@ import { ChatPanel } from './ChatPanel';
 import { IntentPanel } from './IntentPanel';
 import { KbPanel } from './KbPanel';
 import { loadYyAssets, type YyAssets } from './assets';
+import { page } from '../shared/asset';
 
 export function App() {
   const llm = useLlm('deepseek');
@@ -45,6 +46,11 @@ export function App() {
 
         {a && (
           <>
+            <div className="dp-panel-tight" style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: 'var(--fg-dim)' }}>
+              <span>推荐流程：先去商城下一单（或改地址、申请退款）→ 回来问助手，它读到的就是你刚操作过的那张单。</span>
+              <a className="dp-btn" style={{ fontSize: 11, marginLeft: 'auto' }} href={page('shop')}>打开商城 →</a>
+            </div>
+
             <ChatPanel assets={a} llm={{ live: llm.live, mode: llm.mode }} />
             <p style={{ margin: '-4px 2px 0', fontSize: 11, lineHeight: 1.7, color: 'var(--fg-faint)' }}>
               {a.replay.length} 组真实对话回放（{turns} 轮，其中 {toolTurns} 个工具轮）：状态链、工具入参与结果、assistant 文本分别来自项目里的真实产物，拼接处已标注。

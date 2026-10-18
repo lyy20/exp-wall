@@ -1,5 +1,6 @@
 // P2 资产加载：全部来自项目真实导出（public/data/yyhelp/）。
 import { asset } from '../shared/asset';
+import { mergeOrders } from './storeOrders';
 
 export interface YyRule { intent: string; pattern: string; weight: number }
 export interface YyIntent { name: string; desc: string; exit: string }
@@ -82,7 +83,8 @@ export async function loadYyAssets(): Promise<YyAssets> {
     .map((k) => replayRaw.data[k]);
   return {
     config: config.data, intents: intents.data, tools: tools.data, policy: policy.data,
-    orders: orders.data, kb: kb.data, kbVecs: new Int8Array(bin.data), kbMeta: kbMeta.data,
+    // 商城的订单（localStorage）并进来：助手和商城读同一份数据，面试官下完单就能直接问。
+    orders: mergeOrders(orders.data), kb: kb.data, kbVecs: new Int8Array(bin.data), kbMeta: kbMeta.data,
     kbScale: Float32Array.from(kbMeta.data.row_scale ?? []), replay, bytes,
   };
 }

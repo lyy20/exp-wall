@@ -4,6 +4,8 @@ import { cnum } from './assets';
 
 export const STATUS_CN: Record<string, string> = {
   created: '已创建', paid: '已付款', shipped: '已发货', signed: '已签收', closed: '已关闭',
+  // 商城页的「申请退款」会把订单改成这个状态（项目 fixture 里没有，但字段语义一致）
+  refund_pending: '退款审核中',
 };
 const KEYWORDS = ['运费', '退款', '退货', '包邮', '时效', '无理由'];
 const RETRYABLE: Record<string, boolean> = {
@@ -134,10 +136,17 @@ export class ToolRuntime {
     const o = this.a.orders.find((x) => x.order_no === on);
     if (!o) throw new ToolError('NOT_FOUND', '未找到订单 ' + on, '请向用户核对订单号；不要用同一订单号重试');
     if (user_id && o.user_id !== user_id) throw new ToolError('AUTH_FAILED', '订单 ' + on + ' 不属于用户 ' + user_id, '订单归属校验失败：不暴露该订单的任何字段');
+    // 商城写入的订单会多带收货信息/退款状态；存在才返回，fixture 订单的返回形状保持不变。
+    const extra: Record<string, unknown> = {};
+    const shop = o as YyOrder & Record<string, unknown>;
+    for (const k of ['receiver', 'phone', 'address', 'note', 'refund_status']) {
+      const v = shop[k];
+      if (v !== undefined && v !== null && v !== '') extra[k] = v;
+    }
     return {
       order_no: o.order_no, status: o.status, status_cn: STATUS_CN[o.status] ?? o.status,
       total_amount: o.total_amount, created_at: o.created_at, tracking_no: o.tracking_no || '',
-      refundable: o.refundable, items: o.items,
+      refundable: o.refundable, items: o.items, ...extra,
     };
   }
 
