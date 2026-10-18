@@ -185,9 +185,23 @@ export class ToolRuntime {
       out.refundable = o.refundable;
       out.reason = o.refundable ? '在 7 天无理由期内，可申请退货' : '已签收超过 7 天，不适用无理由退货；质量问题仍可申请';
     }
-    out.policy = this.a.policy
-      .filter((p) => p.source.includes('退换货'))
-      .map((p) => ({ chunk_id: p.topic, heading: p.source, text: p.rule }));
+    // 按 aspect 做一次轻量相关性筛选：整库退换货条款有 30+ 条，全量返回会被观测截断，
+    // 而且模型容易只看到前几条（运费/时效这些后补的条款就永远轮不到）。用二元组打分取前 6 条。
+    const candidates = this.a.policy.filter((p) => p.source.includes('退换货'));
+    const runs = (aspect || '').match(/[\u4e00-\u9fff]{2,}/g) || [];
+    const grams = new Set<string>();
+    for (const r of runs) for (let i = 0; i + 2 <= r.length; i += 1) grams.add(r.slice(i, i + 2));
+    const scored = candidates.map((p) => {
+      const hay = p.topic + p.rule;
+      let s = 0;
+      for (const g of grams) if (hay.includes(g)) s += 1;
+      return { p, s };
+    });
+    scored.sort((a, b) => b.s - a.s);
+    const picked = scored.filter((x) => x.s > 0).slice(0, 6);
+    const chosen = picked.length ? picked : scored.slice(0, 8);
+    out.policy = chosen.map(({ p, s }) => ({ chunk_id: p.topic, heading: p.source, text: p.rule, score: s }));
+    out.matched = chosen.length;
     return out;
   }
 

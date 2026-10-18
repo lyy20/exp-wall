@@ -54,7 +54,7 @@ src/
 public/shop/index.html   旧链接兼容：/shop/ 自动跳到 /yyhelp/
 public/tech/              AI / Agent 题材的程序化配图（scripts/make_ai_art.py 生成，本地渲染，无外部图床依赖）
 scripts/make_ai_art.py    配图生成器：智能体星座 / 神经格栅 / 蜂群 / token 流 / 推理树 / 嵌入点云 / 电路 / 波形 / 同心环
-public/data/{rag,yyhelp}/  两个子页的离线资产（真语料子集、量化向量、工具信封与对话回放）
+public/data/{rag,yyhelp}/  两个子页的离线资产（真语料子集、量化向量、工具信封与对话回放）；yyhelp 政策库含运费/时效/拆封/换新/举证/次数六类条款
 .github/workflows/deploy.yml  GitHub Pages 自动部署（BASE_PATH=/exp-wall/）
 site/                    自有域名 agent-lyy.top 的发布配置：wrangler.toml（静态资源 Worker）+ deploy.mjs（一键构建并部署）
 proxy/                   站内代理 Worker（llm.agent-lyy.top）：CORS 白名单、限流、额度记账、SSE 透传
