@@ -27,6 +27,8 @@
 | POST | `/api/llm/chat` | 转发 `/chat/completions`，**SSE 逐字透传，绝不缓冲** |
 | POST | `/api/llm/embeddings` | `BAAI/bge-m3`（SiliconFlow）或 `@cf/baai/bge-m3`（Workers AI 兜底） |
 | POST | `/api/llm/rerank` | `BAAI/bge-reranker-v2-m3`（SiliconFlow）或 `@cf/baai/bge-reranker-base`（Workers AI 兜底） |
+| POST | `/api/visit` | 访问打点：`text/plain` 的 JSON，一次浏览写 1 个 KV 键，返回 **204**；来源白名单与聊天接口同一套 |
+| GET | `/api/visits?token=…&days=N` | 读访问统计（口令 = secret `VISITS_TOKEN`）：逐日 pv/uv、页面、来源、地区、浏览器与设备、最近记录。**详见 §7** |
 | OPTIONS | 以上任意 | CORS 预检，`Access-Control-Max-Age: 3600` |
 
 - 服务端**强制**注入 `stream: true` 与 `stream_options.include_usage: true`，
@@ -192,3 +194,78 @@ curl -i "https://expwall-llm.<你的账号>.workers.dev/api/llm/status" -H "Orig
   `BAAI/bge-reranker-v2-m3` 出精排分，页面四格照实显示真实模型名；SiliconFlow 若回 401/403 会自动降级到 Workers AI，
   所以「key 过期」只会让页面上的模型名换成 `@cf/...`，不会让通道报错。换 key：`npx wrangler secret put SILICONFLOW_API_KEY`（代码不用改）。
   前端仍保留两条降级（离线预计算向量 / 按 RRF 取前 5）作为「两边都不可用」时的最后一道保险。
+
+## 7. 访问记录（`/api/visit` · `/api/visits`）
+
+**为什么自己做而不是接第三方统计**：站点是纯静态的（GitHub Pages + 这个 Worker 的静态资源），没有任何后端，
+想「留下访问记录」就必须有一个能写存储的地方；而这个 Worker 已经绑了 KV。更要紧的是**两个部署域名要一起统计**
+（`lyy20.github.io/exp-wall/` 与 `agent-lyy.top`），第三方统计只能覆盖其中一边，自己的 Worker 两边都能收。
+数据也只落在自己的账号里，不引第三方脚本、不在页面上加 cookie 提示。
+
+**能统计到什么，先把边界说清**：匿名访客**永远无法知道「是谁」**。能拿到的是
+时间 / 看了哪一页 / 从哪个站跳来的 / 大概哪个国家城市 / 什么浏览器、系统、手机还是电脑 / 当日第几次。
+跨天、跨设备认不出同一个人。真想认人只能加登录。
+
+隐私口径：**不存 IP** —— IP 只在内存里参与一次「IP+日期+盐」的不可逆哈希（`u` 字段），只用来数当日独立访客，
+跨天不可串联；不写 cookie；referrer 只留主机名；路径在客户端就去掉了 query。
+
+### 7.1 打开它（两步，其中一步只有你能做）
+
+```bash
+cd proxy
+npx wrangler secret put VISITS_TOKEN   # 自己起一个口令，读统计时要用；不配则读接口一律 503
+npx wrangler deploy
+```
+
+打点接口不需要任何配置就会开始收（页面已经在发），**不配 `VISITS_TOKEN` 只是「读不到」**，不是「收不到」。
+`ALLOWED_ORIGINS` 里已有的两个站点会自动生效，加新域名照旧改它。
+
+### 7.2 读统计
+
+```bash
+cd D:\AI-Learning
+node scripts/visits.mjs --token <你的口令>            # 最近 7 天
+node scripts/visits.mjs --token <你的口令> --days 30  # 最近 30 天
+node scripts/visits.mjs --token <你的口令> --json     # 原始 JSON，自己再加工
+```
+
+口令也可以放环境变量 `VISITS_TOKEN`，免得进 shell history。输出形如：
+
+```
+日期        PV  UV  明细  省略
+2026-10-18   3   2     3     0
+ 页面 / 来源 / 地区 / 环境 / 最近记录（时间·页面·来源·地区·浏览器）
+```
+
+### 7.3 存储形态与配额
+
+一天一个 KV 键 `V:<YYYY-MM-DD>`，值是 `{ n, drop, recs: [...] }`：
+
+- `n` 是当天页面浏览数，**明细到上限也照加**，所以 pv 永远准；
+- `recs` 只留最近 `DAY_RECORD_LIMIT = 400` 条明细，`drop` 记被省略的条数；
+- **uv 与各项分布是按明细算的**，所以爆量的日子这两项会偏小 —— 响应里的 `note` 与 CLI 末尾都会写明这件事，
+  不假装是全量；
+- 一次浏览 = 1 次 KV 写。免费档每天 1000 写，单日上限压在 400 是为了给聊天账本留余量（一次 chat 写 2 个键）；
+- 读—改—写没有锁，并发下可能丢一条（和 §6 的日账本同一个取舍）。
+
+### 7.4 验收（两条，缺一不可）
+
+```bash
+# ① Worker 侧：35 条断言（白名单、入参校验、鉴权、pv/uv 口径、明细上限、既有路由没被碰坏）
+node proxy/test/visits.test.mjs
+
+# ② 全链路：真浏览器 → sendBeacon → Worker → KV → 读统计
+node proxy/test/visits.test.mjs serve 8899     # 一个后台进程：本地 HTTP 壳 + 预置样例
+cd D:\AI-Learning && node scripts/visits.mjs --base http://127.0.0.1:8899 --token test-token
+node scripts/_test-visit-beacon.mjs            # 另开；需要 hero-program 的 npm run preview 在 4173
+```
+
+`_test-visit-beacon.mjs` 会用 CDP 在页面加载前注入 `window.__LEARN_VISIT_ENDPOINT__` 指向本地壳
+（`visits.ts` 里「本机跳过」的规则会被这个开关让位），然后断言：首屏 +1、站内跳转 +1、同会话回退不重复。
+
+### 7.5 两个坑（都已踩过）
+
+- **sendBeacon 必须用 `text/plain` 传 JSON**。`application/json` 不在 CORS 安全清单里，会触发预检，
+  而 beacon 不等预检 → 请求被丢弃，**控制台一声不响**。服务端因此不检查 Content-Type，直接 `JSON.parse` 文本。
+- **「自己是谁」要取 `Origin` 头，不能取本 Worker 的主机名**。页面在 `agent-lyy.top`、接口在 `llm.agent-lyy.top`，
+  拿请求主机名去比，站内跳转永远不会被认成同站 —— 症状是来源列表里多出一个 `agent-lyy.top`，把真实来源挤出 top。

@@ -296,10 +296,15 @@ async function runTests() {
     const ctx = await start();
     const badModel = await post('/api/llm/chat', Object.assign({}, chatBody, { model: 'gpt-4o' }));
     check('未知模型 400', badModel.status === 400, String(badModel.status));
+    // 条数上限**从服务端 /status 读**，不写死。这条断言原来写死「13 条应该被拒」，
+    // 而 limits.ts 把 maxMessages 从 12 提到 30 之后，13 < 30 当然不会被拒 —— 于是它一直红着，
+    // 而且红得看不出原因（期望 400 实际 200）。写死一个和阈值耦合的数字，就是在测期望值不是测机制。
+    const st = await getStatus();
+    const maxMessages = (st.json && st.json.limits && st.json.limits.maxMessages) || 30;
     const many = [];
-    for (let i = 0; i < 13; i += 1) many.push({ role: 'user', content: 'hi' });
+    for (let i = 0; i < maxMessages + 1; i += 1) many.push({ role: 'user', content: 'hi' });
     const tooMany = await post('/api/llm/chat', Object.assign({}, chatBody, { messages: many }));
-    check('消息条数超限 400', tooMany.status === 400, String(tooMany.status));
+    check('消息条数超限 400（上限 ' + maxMessages + '，发 ' + (maxMessages + 1) + '）', tooMany.status === 400, String(tooMany.status));
     const longMsg = await post('/api/llm/chat', Object.assign({}, chatBody, { messages: [{ role: 'user', content: 'x'.repeat(7000) }] }));
     check('单条超 6000 字符 400', longMsg.status === 400, String(longMsg.status));
     const badRole = await post('/api/llm/chat', Object.assign({}, chatBody, { messages: [{ role: 'tool', content: 'hi' }] }));

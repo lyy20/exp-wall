@@ -1,6 +1,7 @@
 // exp-wall 站内 LLM 代理（Cloudflare Worker）
 // 目的：访客不填自己的 key 也能真跑「生成」这一步；密钥只存在服务端 secret 里，永不进前端。
 // 路由：GET /api/llm/status · POST /api/llm/chat · POST /api/llm/embeddings · POST /api/llm/rerank
+//       POST /api/visit（页面打点）· GET /api/visits?token=（读访问统计，见 visits.ts）
 // 原则：fail closed —— 没绑 KV、没配 key、模型不在白名单、超长、超频、超预算，一律明确拒绝并说清原因。
 
 import {
@@ -24,6 +25,7 @@ import {
   validateEmbeddings,
   validateRerank,
 } from './guards.ts';
+import { routeVisits } from './visits.ts';
 
 /** Workers AI 绑定（wrangler.toml 里的 [ai] binding = "AI"）；没绑就是 undefined，走 SiliconFlow 或明确拒绝。 */
 export interface AiBinding {
@@ -39,6 +41,8 @@ export interface Env {
   SILICONFLOW_BASE?: string;
   ALLOWED_ORIGINS?: string;
   LIMITS_JSON?: string;
+  /** 读访问统计的口令；不配则 /api/visits 一律 503（打点接口不受影响）。 */
+  VISITS_TOKEN?: string;
 }
 
 export interface Ctx {
@@ -410,6 +414,12 @@ async function route(req: Request, env: Env, ctx: Ctx): Promise<Response> {
     const allowed = parseOrigins(env.ALLOWED_ORIGINS);
     const limits = limitsFrom(env.LIMITS_JSON);
     const ip = clientIp(req);
+
+    // 访问记录先分流：读接口用口令鉴权（命令行没有 Origin 头，套下面那套闸门会被判 403），
+    // 打点接口在 visits.ts 内部再套一次来源白名单。两条都不影响 /api/llm/* 的既有行为。
+    if (url.pathname === '/api/visit' || url.pathname === '/api/visits') {
+      return routeVisits(req, env, now, origin, allowed);
+    }
 
     if (!originAllowed(origin, allowed)) {
       return jsonResponse({ error: { code: 'origin-not-allowed', message: '只允许白名单来源调用：' + allowed.join(', ') } }, 403, null);
