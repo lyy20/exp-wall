@@ -239,8 +239,14 @@ export function ShopPanel({ session, onLogout }: { session: Session; onLogout: (
                 </div>
               )}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <button type="button" className="dp-btn" style={{ fontSize: 11 }} disabled={!o.refundable || o.refund_status === 'requested'} onClick={() => refund(o)}>
-                  {o.refund_status === 'requested' ? '退款审核中' : '申请退款'}
+                <button
+                  type="button"
+                  className="dp-btn"
+                  style={{ fontSize: 11 }}
+                  disabled={!o.refundable || o.refund_status === 'requested' || o.refund_status === 'approved'}
+                  onClick={() => refund(o)}
+                >
+                  {o.refund_status === 'approved' ? '已退款' : o.refund_status === 'requested' ? '退款审核中' : o.refund_status === 'rejected' ? '重新申请退款' : '申请退款'}
                 </button>
                 <button type="button" className="dp-btn" style={{ fontSize: 11 }} onClick={() => setEditAddr({ no: o.order_no, value: o.address ?? '' })}>修改地址</button>
               </div>
