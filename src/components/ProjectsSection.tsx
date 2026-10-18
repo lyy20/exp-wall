@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { Fragment, useRef } from 'react';
 import { motion, useScroll, useTransform, type MotionValue } from 'framer-motion';
 import FadeIn from './FadeIn';
 import { page } from '../shared/asset';
@@ -45,7 +45,8 @@ const PROJECTS: Project[] = [
     role: '独立开发 · 2026.09 — 至今',
     stack: [
       { label: '编排与状态', items: ['LangGraph', 'TypedDict state', 'checkpointer'] },
-      { label: '检索与语料', items: ['Milvus', 'pymilvus', 'jieba', 'bge-m3', 'RRF + 精排'] },
+      { label: '检索与语料', items: ['Milvus', 'pymilvus', 'jieba', 'bge-m3'] },
+      { label: '融合与重排', items: ['RRF + 精排'] },
       { label: '服务与闭环', items: ['FastAPI + SSE', 'Langfuse v4', 'MySQL', 'pytest'] },
     ],
     points: [
@@ -79,7 +80,8 @@ const PROJECTS: Project[] = [
     tagline: '把 PDF 文献库变成答案带可核对引用的问答链路，重点在评测与消融，而不是再接一个模型。',
     role: '独立开发 · 2026.08 — 至今',
     stack: [
-      { label: '检索链路', items: ['PyMuPDF', 'bge-m3', 'FAISS', 'rank-bm25', 'RRF', 'bge-reranker-v2-m3'] },
+      { label: '索引与切块', items: ['PyMuPDF', 'bge-m3', 'FAISS'] },
+      { label: '检索与融合', items: ['rank-bm25', 'RRF', 'bge-reranker-v2-m3'] },
       { label: '服务化', items: ['FastAPI + SSE', '鉴权 / 限流 / 配额', '成本熔断', 'Docker'] },
       { label: '工程', items: ['GitHub Actions CI', '索引版本化 + 回滚', 'Streamlit 四页'] },
     ],
@@ -113,7 +115,8 @@ const PROJECTS: Project[] = [
     tagline: '把「部分可观测下的状态估计」与「执行不完美下的可靠性设计」做成一篇第一作者论文。',
     role: '第一作者 · 2024.12 — 至今 · 投稿 Science China Information Sciences（中科院一区，审稿中）',
     stack: [
-      { label: '算法', items: ['PyTorch', 'DI-engine', 'SAC', 'PER', 'ICM'] },
+      { label: '算法', items: ['PyTorch', 'DI-engine', 'SAC'] },
+      { label: '经验回放', items: ['PER', 'ICM'] },
       { label: '估计与仿真', items: ['EKF', 'Particle Environment', 'Domain Randomization'] },
       { label: '评测', items: ['12 指标', '200 episodes', '3 算法 × 3 预测方案'] },
     ],
@@ -151,7 +154,8 @@ const PROJECTS: Project[] = [
     stack: [
       { label: '站点', items: ['VitePress 1.6', 'Markdown', 'Mermaid', 'MathJax'] },
       { label: '图解', items: ['archify', '43 张交互式 SVG', '明暗双主题'] },
-      { label: '助教与检索', items: ['Express 5 + SSE', 'BM25 + 中文 bigram', 'DeepSeek'] },
+      { label: '助教', items: ['Express 5 + SSE', 'BM25 + 中文 bigram', 'DeepSeek'] },
+      { label: '部署', items: ['Cloudflare Worker', 'GitHub Pages', '静态快照'] },
     ],
     points: [
       {
@@ -232,48 +236,56 @@ function ProjectCard({
 
         <p className="mt-3 text-[10px] leading-relaxed text-[#D7E2EA]/55 md:hidden">{stackLine}</p>
 
-        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5 md:gap-4">
-          <div className="col-span-2 hidden flex-col gap-2 md:flex">
-            {project.stack.map((group) => (
-              <div
-                key={group.label}
-                className="rounded-2xl border border-[#D7E2EA]/15 bg-[#D7E2EA]/[0.04] p-3"
-              >
-                <p className="text-[9px] uppercase tracking-[0.2em] text-[#D7E2EA]/45 md:text-[10px]">
-                  {group.label}
-                </p>
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {group.items.map((item) => (
-                    <span
-                      key={item}
-                      className="rounded-full bg-[#D7E2EA]/10 px-2 py-0.5 text-[10px] text-[#D7E2EA] md:text-[11px]"
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+        {/* 左右两列按「行」配对：一行 = 1 个技术栈框 + 1 条要点，用同一个 grid 行承载。
+            为什么不能是「两个各管各的 flex 列」：左右框数不同时（3 vs 4），左列底部会空出一大片 ——
+            实测 144px —— 而且两列的行高本来就不同（左 68px / 右 85px），怎么调 gap 都对不齐。
+            改成一个 grid 之后：同一行的两个框被拉成等高，行间距与列间距也统一成同一个值。 */}
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-5">
+          {Array.from({ length: Math.max(project.stack.length, project.points.length) }).map((_, i) => {
+            const group = project.stack[i];
+            const point = project.points[i];
+            return (
+              <Fragment key={i}>
+                {group ? (
+                  <div className="hidden rounded-2xl border border-[#D7E2EA]/15 bg-[#D7E2EA]/[0.04] p-3 md:col-span-2 md:flex md:flex-col">
+                    <p className="text-[9px] uppercase tracking-[0.2em] text-[#D7E2EA]/45 md:text-[10px]">
+                      {group.label}
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {group.items.map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full bg-[#D7E2EA]/10 px-2 py-0.5 text-[10px] text-[#D7E2EA] md:text-[11px]"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="hidden md:col-span-2 md:block" />
+                )}
 
-          <div className="col-span-3 flex flex-col gap-2">
-            {project.points.map((point, i) => (
-              <div
-                key={point.tag}
-                className={
-                  'rounded-2xl border border-[#D7E2EA]/15 bg-[#D7E2EA]/[0.03] px-3 py-2' +
-                  (i > 1 ? ' hidden md:block' : '')
-                }
-              >
-                <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#D7E2EA]/50 md:text-[10px]">
-                  {point.tag}
-                </span>
-                <p className="mt-1 text-[11px] leading-[1.55] text-[#D7E2EA] md:text-[12.5px]">
-                  {point.text}
-                </p>
-              </div>
-            ))}
-          </div>
+                {point ? (
+                  <div
+                    className={
+                      'rounded-2xl border border-[#D7E2EA]/15 bg-[#D7E2EA]/[0.03] px-3 py-2 md:col-span-3' +
+                      (i > 1 ? ' hidden md:block' : '')
+                    }
+                  >
+                    <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#D7E2EA]/50 md:text-[10px]">
+                      {point.tag}
+                    </span>
+                    <p className="mt-1 text-[11px] leading-[1.55] text-[#D7E2EA] md:text-[12.5px]">
+                      {point.text}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="hidden md:col-span-3 md:block" />
+                )}
+              </Fragment>
+            );
+          })}
         </div>
 
         <div className="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-t border-[#D7E2EA]/15 pt-3 md:mt-3 md:pt-3">
